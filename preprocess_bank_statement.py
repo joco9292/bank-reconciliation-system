@@ -21,8 +21,22 @@ def preprocess_bank_statement(filepath='june 2025 bank statement.CSV'):
     # Fill NaN values with 0
     bank_df = bank_df.fillna(value=0)
     
-    # Calculate net amount (credits are positive, debits are negative)
-    bank_df['Amount'] = bank_df['Credit Amount'] - bank_df['Debit Amount']
+    # Calculate net amount with special handling for BPAD transactions
+    # Credits are always positive
+    # Debits are negative ONLY if 'BPAD' is in the description, otherwise they're positive
+    def calculate_amount(row):
+        credit = row['Credit Amount']
+        debit = row['Debit Amount']
+        description = str(row['Description']).upper()
+        
+        # If BPAD is in description, debit is negative (actual debit/fee)
+        if 'BPAD' in description and debit > 0:
+            return credit - debit
+        else:
+            # Otherwise, both credit and debit are positive (they're deposits)
+            return credit
+    
+    bank_df['Amount'] = bank_df.apply(calculate_amount, axis=1)
     
     # Keep only necessary columns
     bank_df = bank_df[['Date', 'Description', 'Amount']]
@@ -45,6 +59,12 @@ if __name__ == "__main__":
     # Test the function
     df = preprocess_bank_statement()
     print("Bank Statement Preview:")
-    print(df.head())
+    print(df.head(20))  # Show more rows to see BPAD transactions
     print(f"\nShape: {df.shape}")
     print(f"Date range: {df['Date'].min()} to {df['Date'].max()}")
+    
+    # Show BPAD transactions specifically
+    bpad_transactions = df[df['Description'].str.contains('BPAD', case=False, na=False)]
+    if not bpad_transactions.empty:
+        print(f"\nBPAD Transactions (should be negative):")
+        print(bpad_transactions)

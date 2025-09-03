@@ -14,6 +14,13 @@ from matching_helpers import (
     filter_split_transactions
 )
 
+# Import the new highlighting functions
+from highlighting_functions import (
+    create_highlighted_bank_statement,
+    create_highlighted_card_summary,
+    extract_matched_info_from_results
+)
+
 def prepare_data_for_matching(card_summary: pd.DataFrame, bank_statement: pd.DataFrame) -> tuple:
     """
     Add additional columns needed for matching process.
@@ -150,17 +157,21 @@ def print_matching_summary(results: dict):
 if __name__ == "__main__":
     print("=== Transaction Matching System ===\n")
     
+    # Store file paths for later use
+    BANK_STATEMENT_PATH = 'june 2025 bank statement.CSV'
+    CARD_SUMMARY_PATH = 'card summary june.xlsx'
+    
     # Step 1: Load and preprocess data
     print("Step 1: Loading and preprocessing data...")
     try:
-        bank_statement = preprocess_bank_statement('june 2025 bank statement.CSV')
+        bank_statement = preprocess_bank_statement(BANK_STATEMENT_PATH)
         print(f"✓ Loaded bank statement: {len(bank_statement)} transactions")
     except Exception as e:
         print(f"✗ Error loading bank statement: {e}")
         exit(1)
     
     try:
-        card_summary = preprocess_card_summary('card summary june.xlsx')
+        card_summary = preprocess_card_summary(CARD_SUMMARY_PATH)
         print(f"✓ Loaded card summary: {len(card_summary)} days")
     except Exception as e:
         print(f"✗ Error loading card summary: {e}")
@@ -195,8 +206,45 @@ if __name__ == "__main__":
     generate_enhanced_report(results, bank_statement, output_filename)
     print(f"\n✓ Detailed report saved to: {output_filename}")
     
+    # Step 6: Create highlighted copies of original files
+    print("\nStep 6: Creating highlighted copies of original files...")
+    
+    # Extract matched information including unmatched details
+    matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
+    
+    # DEBUG: Print what we're passing to the highlighting function
+    print("\n=== DEBUG: Card Summary Matching Info ===")
+    print(f"Number of dates with matches: {len(matched_dates_and_types)}")
+    if matched_dates_and_types:
+        # Show first 3 entries
+        for i, (date, card_types) in enumerate(list(matched_dates_and_types.items())[:3]):
+            print(f"Date: {date.strftime('%Y-%m-%d')}, Card Types: {card_types}")
+    
+    # Check card summary columns
+    temp_card_summary = preprocess_card_summary(CARD_SUMMARY_PATH)
+    print(f"\nCard Summary Columns: {[col for col in temp_card_summary.columns if col != 'Date' and not col.startswith('Unnamed')]}")
+    
+    # Create highlighted bank statement
+    create_highlighted_bank_statement(
+        bank_statement_path=BANK_STATEMENT_PATH,
+        matched_bank_rows=matched_bank_rows,
+        output_path='bank_statement_highlighted.xlsx',
+        differences_by_row=differences_by_row
+    )
+    
+    # Create highlighted card summary with unmatched info
+    create_highlighted_card_summary(
+        card_summary_path=CARD_SUMMARY_PATH,
+        matched_dates_and_types=matched_dates_and_types,
+        output_path='card_summary_highlighted.xlsx',
+        skiprows=[0, 1, 3, 34],  # Same skiprows as used in preprocessing
+        differences_info=differences_by_date_type,
+        unmatched_info=unmatched_info  # ADD THIS LINE
+    )
+
     # Final summary
     print("\n=== PROCESS COMPLETE ===")
-
-
-
+    print("\nGenerated files:")
+    print("  1. matching_report_enhanced.xlsx - Detailed matching report")
+    print("  2. bank_statement_highlighted.xlsx - Bank statement with matched rows highlighted")
+    print("  3. card_summary_highlighted.xlsx - Card summary with matched cells highlighted")

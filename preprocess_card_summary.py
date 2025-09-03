@@ -20,6 +20,15 @@ def preprocess_card_summary(filepath='card summary june.xlsx', skiprows=[0, 1, 3
     # Clean column names (remove any leading/trailing spaces)
     card_summary.columns = card_summary.columns.str.strip()
     
+    # Convert all card type columns to numeric (except Date and any text columns)
+    # Get list of columns that should be numeric
+    numeric_columns = [col for col in card_summary.columns 
+                      if col not in ['Date'] and not col.startswith('Unnamed')]
+    
+    # Convert to numeric, replacing any non-numeric values with 0
+    for col in numeric_columns:
+        card_summary[col] = pd.to_numeric(card_summary[col], errors='coerce').fillna(0)
+    
     return card_summary
 
 if __name__ == "__main__":
@@ -30,3 +39,5 @@ if __name__ == "__main__":
     print(f"\nColumns: {df.columns.tolist()}")
     print(f"Shape: {df.shape}")
     print(f"Date range: {df['Date'].min()} to {df['Date'].max()}")
+    print(f"\nData types:")
+    print(df.dtypes)

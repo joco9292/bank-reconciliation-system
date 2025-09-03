@@ -56,11 +56,14 @@ def filter_exact_match(transactions: pd.DataFrame, expected_amount: float,
     ]
     
     if len(exact_matches) > 0:
+        actual_total = exact_matches['Amount'].sum()
         return {
             'matched': True,
             'match_type': 'exact',
             'transactions': exact_matches.to_dict('records'),
-            'bank_rows': exact_matches['Bank_Row_Number'].tolist()
+            'bank_rows': exact_matches['Bank_Row_Number'].tolist(),
+            'actual_total': actual_total,
+            'difference': actual_total - expected_amount
         }
     
     return {'matched': False}
@@ -81,7 +84,9 @@ def filter_sum_by_description(transactions: pd.DataFrame, expected_amount: float
                 'match_type': 'sum_by_description',
                 'description': desc,
                 'transactions': group.to_dict('records'),
-                'bank_rows': group['Bank_Row_Number'].tolist()
+                'bank_rows': group['Bank_Row_Number'].tolist(),
+                'actual_total': group_sum,
+                'difference': group_sum - expected_amount
             }
     
     # Try partial combinations by description
@@ -100,7 +105,9 @@ def filter_sum_by_description(transactions: pd.DataFrame, expected_amount: float
                         'match_type': 'partial_sum_by_description',
                         'description': desc,
                         'transactions': selected_trans.to_dict('records'),
-                        'bank_rows': selected_trans['Bank_Row_Number'].tolist()
+                        'bank_rows': selected_trans['Bank_Row_Number'].tolist(),
+                        'actual_total': combo_sum,
+                        'difference': combo_sum - expected_amount
                     }
     
     return {'matched': False}
@@ -125,13 +132,16 @@ def filter_by_amount_range(transactions: pd.DataFrame, expected_amount: float,
         range_matches = range_matches.copy()
         range_matches['Difference'] = abs(range_matches['Amount'] - expected_amount)
         closest_match = range_matches.nsmallest(1, 'Difference')
+        actual_total = closest_match['Amount'].sum()
         
         return {
             'matched': True,
             'match_type': 'amount_range',
             'tolerance_used': percentage_tolerance,
             'transactions': closest_match.to_dict('records'),
-            'bank_rows': closest_match['Bank_Row_Number'].tolist()
+            'bank_rows': closest_match['Bank_Row_Number'].tolist(),
+            'actual_total': actual_total,
+            'difference': actual_total - expected_amount
         }
     
     return {'matched': False}
@@ -156,7 +166,9 @@ def filter_split_transactions(transactions: pd.DataFrame, expected_amount: float
                     'match_type': 'split_transactions',
                     'transaction_count': len(combo),
                     'transactions': selected_trans.to_dict('records'),
-                    'bank_rows': selected_trans['Bank_Row_Number'].tolist()
+                    'bank_rows': selected_trans['Bank_Row_Number'].tolist(),
+                    'actual_total': combo_sum,
+                    'difference': combo_sum - expected_amount
                 }
     
     return {'matched': False}
@@ -233,8 +245,10 @@ class TransactionMatcher:
                             'match_type': result['match_type'],
                             'transactions': result['transactions'],
                             'bank_rows': result['bank_rows'],
+                            'actual_total': result.get('actual_total', expected_amount),
+                            'difference': result.get('difference', 0),
                             **{k: v for k, v in result.items() 
-                               if k not in ['matched', 'match_type', 'transactions', 'bank_rows']}
+                               if k not in ['matched', 'match_type', 'transactions', 'bank_rows', 'actual_total', 'difference']}
                         }
                         matched = True
                         break
@@ -251,6 +265,3 @@ class TransactionMatcher:
             results[date] = date_results
         
         return results
-    
-
-
