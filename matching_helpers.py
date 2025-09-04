@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Callable
+from typing import Dict, List, Callable, Optional, Optional, Set
 from itertools import combinations
 
 def identify_card_type(description: str) -> str:
@@ -115,7 +115,7 @@ def filter_sum_by_description(transactions: pd.DataFrame, expected_amount: float
 
 # make this have a hard cap otuside of just the percentage base
 def filter_by_amount_range(transactions: pd.DataFrame, expected_amount: float,
-                          percentage_tolerance: float = 0.05) -> Dict:
+                          percentage_tolerance: float = 0.03) -> Dict:
     """
     Filter 4: Match within percentage range (e.g., 5% tolerance).
     """
@@ -175,36 +175,95 @@ def filter_split_transactions(transactions: pd.DataFrame, expected_amount: float
 
 class TransactionMatcher:
     """
-    Extensible transaction matching engine.
+    Extensible transaction matching engine with card-type-specific filtering.
     """
     def __init__(self):
-        # Define the filter pipeline - ADD NEW FILTERS HERE!
-        self.filters = [
+        # Define the default filter pipeline
+        self.default_filters = [
             ('exact_match', filter_exact_match),
             ('sum_by_description', filter_sum_by_description),
-            # Add new filters here:
-            # ('amount_range', filter_by_amount_range),
-            # ('split_transactions', filter_split_transactions),
         ]
+        
+        # Define card-type-specific filters
+        # Format: {card_type: [(filter_name, filter_func), ...]}
+        self.card_specific_filters = {
+            'Amex': [
+                ('amount_range', filter_by_amount_range),
+            ],
+            # Add more card-specific filters here as needed
+            # 'Discover': [
+            #     ('split_transactions', filter_split_transactions),
+            # ],
+        }
+        
+        # Optional: Define filters to exclude for specific card types
+        self.excluded_filters = {
+            # Example: 'Debit Visa': ['sum_by_description']
+        }
     
-    def add_filter(self, name: str, filter_func: Callable, position: int = None):
+    def add_filter(self, name: str, filter_func: Callable, position: int = None, 
+                   card_types: Optional[List[str]] = None):
         """
         Add a new filter to the pipeline.
+        
+        Args:
+            name: Name of the filter
+            filter_func: Filter function to apply
+            position: Position in default pipeline (None = append to end)
+            card_types: Optional list of card types this filter applies to.
+                       If None, applies to all card types.
         """
-        if position is None:
-            self.filters.append((name, filter_func))
+        if card_types is None:
+            # Add to default pipeline
+            if position is None:
+                self.default_filters.append((name, filter_func))
+            else:
+                self.default_filters.insert(position, (name, filter_func))
         else:
-            self.filters.insert(position, (name, filter_func))
+            # Add to specific card types
+            for card_type in card_types:
+                if card_type not in self.card_specific_filters:
+                    self.card_specific_filters[card_type] = []
+                self.card_specific_filters[card_type].append((name, filter_func))
+    
+    def get_filters_for_card_type(self, card_type: str) -> List[tuple]:
+        """
+        Get the appropriate filter pipeline for a given card type.
+        
+        Args:
+            card_type: The card type to get filters for
+            
+        Returns:
+            List of (filter_name, filter_func) tuples
+        """
+        # Start with default filters
+        filters = self.default_filters.copy()
+        
+        # Remove any excluded filters for this card type
+        if card_type in self.excluded_filters:
+            excluded_names = self.excluded_filters[card_type]
+            filters = [(name, func) for name, func in filters 
+                      if name not in excluded_names]
+        
+        # Add card-specific filters
+        if card_type in self.card_specific_filters:
+            filters.extend(self.card_specific_filters[card_type])
+        
+        return filters
     
     def match_transactions(self, card_summary: pd.DataFrame, bank_statement: pd.DataFrame, 
-                          forward_days: int = 3) -> Dict:
+                          forward_days: int = 3, verbose: bool = False) -> Dict:
         """
-        Match transactions using the filter pipeline with two-pass approach.
-        Pass 1: Match all transactions normally
-        Pass 2: For unmatched card summary cells, calculate totals using only unmatched bank transactions
+        Match transactions using the filter pipeline with card-type-specific filters.
+        
+        Args:
+            card_summary: DataFrame with expected transactions by card type
+            bank_statement: DataFrame with actual bank transactions
+            forward_days: Number of days forward to look for matches
+            verbose: If True, print debug information about filter usage
         """
         results = {}
-        matched_bank_rows = set()  # Track all matched bank rows across all dates
+        matched_bank_rows = set()
         
         # Card types to process
         card_types = [col for col in card_summary.columns 
@@ -240,9 +299,17 @@ class TransactionMatcher:
                     }
                     continue
                 
-                # Run through filter pipeline
+                # Get the appropriate filters for this card type
+                filters_to_apply = self.get_filters_for_card_type(card_type)
+                
+                if verbose:
+                    filter_names = [name for name, _ in filters_to_apply]
+                    print(f"Processing {date.strftime('%Y-%m-%d')} {card_type}: "
+                          f"Using filters: {filter_names}")
+                
+                # Run through the card-type-specific filter pipeline
                 matched = False
-                for filter_name, filter_func in self.filters:
+                for filter_name, filter_func in filters_to_apply:
                     result = filter_func(filtered_transactions, expected_amount)
                     
                     if result['matched']:
@@ -254,11 +321,14 @@ class TransactionMatcher:
                             'actual_total': result.get('actual_total', expected_amount),
                             'difference': result.get('difference', 0),
                             **{k: v for k, v in result.items() 
-                               if k not in ['matched', 'match_type', 'transactions', 'bank_rows', 'actual_total', 'difference']}
+                               if k not in ['matched', 'match_type', 'transactions', 
+                                           'bank_rows', 'actual_total', 'difference']}
                         }
-                        # Track matched bank rows
                         matched_bank_rows.update(result['bank_rows'])
                         matched = True
+                        
+                        if verbose:
+                            print(f"  ✓ Matched with {filter_name}")
                         break
                 
                 if not matched:
@@ -267,13 +337,19 @@ class TransactionMatcher:
                         'expected': expected_amount,
                         'date': date,
                         'card_type': card_type,
-                        'forward_days': forward_days
+                        'forward_days': forward_days,
+                        'filters_tried': [name for name, _ in filters_to_apply]
                     }
+                    
+                    if verbose:
+                        print(f"  ✗ No match found after trying {len(filters_to_apply)} filters")
             
             results[date] = date_results
         
         # PASS 2: Recalculate unmatched totals using only unmatched bank transactions
-        print("\nPass 2: Calculating unmatched transaction totals...")
+        if not verbose:
+            print("\nPass 2: Calculating unmatched transaction totals...")
+        
         for date, date_results in results.items():
             for card_type, unmatch_info in date_results['unmatched_by_card_type'].items():
                 if 'date' in unmatch_info:  # Only process those that need recalculation
@@ -295,12 +371,12 @@ class TransactionMatcher:
                         'expected': unmatch_info['expected'],
                         'found_transactions': len(unmatched_only),
                         'total_found': unmatched_only['Amount'].sum() if len(unmatched_only) > 0 else 0,
-                        'reason': 'No match found after all filters',
+                        'reason': f"No match found after trying filters: {unmatch_info.get('filters_tried', [])}",
                         'bank_rows': unmatched_only['Bank_Row_Number'].tolist()
                     }
                     
                     # Debug output for significant unmatched amounts
-                    if unmatch_info['expected'] > 1000:
+                    if unmatch_info['expected'] > 1000 and not verbose:
                         print(f"  {unmatch_info['date'].strftime('%Y-%m-%d')} {card_type}: "
                               f"Expected ${unmatch_info['expected']:,.2f}, "
                               f"Found ${unmatched_only['Amount'].sum():,.2f} "

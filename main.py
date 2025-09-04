@@ -219,7 +219,7 @@ if __name__ == "__main__":
     
     # Store file paths for later use
     BANK_STATEMENT_PATH = 'june 2025 bank statement.CSV'
-    CARD_SUMMARY_PATH = 'card summary june.xlsx'
+    CARD_SUMMARY_PATH = 'XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (3).xlsx'
     
     # Step 1: Load and preprocess data
     print("Step 1: Loading and preprocessing data...")
@@ -245,18 +245,36 @@ if __name__ == "__main__":
     print("\nCard types identified in bank statement:")
     print(bank_statement['Card_Type'].value_counts())
     
-    # Step 3: Create matcher and optionally add filters
-    print("\nStep 3: Setting up transaction matcher...")
+    # Step 3: Create matcher with card-type-specific filters
+    print("\nStep 3: Setting up transaction matcher with card-type-specific filters...")
     matcher = TransactionMatcher()
     
-    # Uncomment to add additional filters:
-    # matcher.add_filter('amount_range', filter_by_amount_range)
-    # matcher.add_filter('split_transactions', filter_split_transactions)
+    # OPTION 1: Add filters to specific card types only
+    # This adds amount_range ONLY for Amex transactions
+    matcher.add_filter('amount_range', filter_by_amount_range, card_types=['Amex'])
     
-    # Step 4: Run matching algorithm
+    # OPTION 2: You can also add filters to multiple specific card types
+    # matcher.add_filter('split_transactions', filter_split_transactions, 
+    #                   card_types=['Discover', 'Other Cards'])
+    
+    # OPTION 3: Add a filter to ALL card types (default behavior)
+    # matcher.add_filter('new_filter', new_filter_function)  # No card_types param = applies to all
+    
+    # OPTION 4: You can also modify the class initialization directly to set up
+    # card-specific filters (see the TransactionMatcher.__init__ method)
+    
+    # Alternative approach: Create a custom matcher with specific configuration
+    # custom_matcher = create_custom_matcher()
+    
+    # Step 4: Run matching algorithm with verbose output to see which filters are used
     print("\nStep 4: Running matching algorithm...")
-    results = matcher.match_transactions(card_summary, bank_statement, forward_days=3)
+    print("Note: amount_range filter will ONLY be applied to Amex transactions\n")
     
+    # Set verbose=True to see which filters are applied to each card type
+    results = matcher.match_transactions(card_summary, bank_statement, 
+                                        forward_days=3, verbose=False)
+    
+    # Rest of your main.py code remains the same...
     # Step 5: Extract matched information
     matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
     
@@ -293,7 +311,7 @@ if __name__ == "__main__":
         output_path='card_summary_highlighted.xlsx',
         differences_info=differences_by_date_type,
         unmatched_info=unmatched_info,
-        differences_by_card_type=discrepancies_by_type  # Pass the net discrepancies
+        differences_by_card_type=discrepancies_by_type
     )
     
     # Final summary
@@ -303,7 +321,35 @@ if __name__ == "__main__":
     print("  2. bank_statement_highlighted.xlsx - Bank statement with matched rows highlighted")
     print("  3. card_summary_highlighted.xlsx - Card summary with matched cells highlighted")
     
-    # Show what's included in discrepancy calculation
     if first_matched_date:
         print(f"\nNote: Discrepancies calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards")
         print("(Earlier bank transactions excluded as they belong to previous month)")
+
+
+# Optional: Create a function to build a custom matcher with complex configurations
+def create_custom_matcher():
+    """
+    Create a TransactionMatcher with a complex custom configuration.
+    """
+    matcher = TransactionMatcher()
+    
+    # Configure different filters for different card types
+    
+    # Amex: Use looser matching including amount range
+    matcher.add_filter('amount_range', 
+                      lambda trans, amt: filter_by_amount_range(trans, amt, percentage_tolerance=0.10),
+                      card_types=['Amex'])
+    
+    # Discover: Try split transactions
+    matcher.add_filter('split_transactions', filter_split_transactions, 
+                      card_types=['Discover'])
+    
+    # Debit cards: Use stricter matching (default filters only)
+    # No additional filters needed
+    
+    # Master Card: Use a tighter amount range
+    matcher.add_filter('amount_range_tight',
+                      lambda trans, amt: filter_by_amount_range(trans, amt, percentage_tolerance=0.02),
+                      card_types=['Master Card'])
+    
+    return matcher
