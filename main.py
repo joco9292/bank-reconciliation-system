@@ -4,7 +4,7 @@ from openpyxl.styles import PatternFill
 
 # Import preprocessor functions
 from preprocess_bank_statement import preprocess_bank_statement
-from preprocess_card_summary import preprocess_card_summary
+from preprocess_card_summary import preprocess_card_summary_dynamic, create_highlighted_card_summary_dynamic
 
 # Import helper functions and classes
 from matching_helpers import (
@@ -17,7 +17,6 @@ from matching_helpers import (
 # Import the new highlighting functions
 from highlighting_functions import (
     create_highlighted_bank_statement,
-    create_highlighted_card_summary,
     extract_matched_info_from_results
 )
 
@@ -32,6 +31,63 @@ def prepare_data_for_matching(card_summary: pd.DataFrame, bank_statement: pd.Dat
     bank_statement['Card_Type'] = bank_statement['Description'].apply(identify_card_type)
     
     return card_summary, bank_statement
+
+def find_first_matched_date(matched_bank_rows: set, bank_statement: pd.DataFrame) -> pd.Timestamp:
+    """
+    Find the date of the earliest matched transaction.
+    """
+    if not matched_bank_rows:
+        return None
+    
+    matched_transactions = bank_statement[bank_statement['Bank_Row_Number'].isin(matched_bank_rows)]
+    if matched_transactions.empty:
+        return None
+    
+    return matched_transactions['Date'].min()
+
+def calculate_total_discrepancies_by_card_type(results: dict, bank_statement: pd.DataFrame, 
+                                              matched_bank_rows: set) -> dict:
+    """
+    Calculate total discrepancies by comparing:
+    - Unmatched bank transactions (after first match) 
+    - Unmatched card summary expectations
+    
+    Returns:
+        dict: Card type -> net discrepancy (positive = bank has more, negative = card summary expects more)
+    """
+    discrepancies_by_type = {}
+    
+    # Find the first matched transaction date
+    first_matched_date = find_first_matched_date(matched_bank_rows, bank_statement)
+    
+    # Step 1: Add up all unmatched BANK transactions (after first match)
+    if first_matched_date:
+        unmatched_bank_df = bank_statement[
+            (~bank_statement['Bank_Row_Number'].isin(matched_bank_rows)) &
+            (bank_statement['Date'] > first_matched_date)
+        ]
+    else:
+        # If no matches at all, count all bank transactions
+        unmatched_bank_df = bank_statement[~bank_statement['Bank_Row_Number'].isin(matched_bank_rows)]
+    
+    # Sum unmatched bank amounts by card type (these are EXTRA transactions we found)
+    for card_type in unmatched_bank_df['Card_Type'].unique():
+        if card_type != 'Unknown':
+            type_df = unmatched_bank_df[unmatched_bank_df['Card_Type'] == card_type]
+            if card_type not in discrepancies_by_type:
+                discrepancies_by_type[card_type] = 0
+            # Add what we found but didn't expect
+            discrepancies_by_type[card_type] += type_df['Amount'].sum()
+    
+    # Step 2: Subtract all unmatched CARD SUMMARY expectations
+    for date, date_results in results.items():
+        for card_type, unmatch_info in date_results['unmatched_by_card_type'].items():
+            if card_type not in discrepancies_by_type:
+                discrepancies_by_type[card_type] = 0
+            # Subtract what we expected but didn't find
+            discrepancies_by_type[card_type] -= unmatch_info.get('expected', 0)
+    
+    return discrepancies_by_type, first_matched_date
 
 def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame, 
                            output_path: str = 'matching_report_enhanced.xlsx'):
@@ -115,7 +171,7 @@ def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame,
         bank_ref = bank_statement[['Bank_Row_Number', 'Date', 'Description', 'Amount', 'Card_Type']]
         bank_ref.to_excel(writer, sheet_name='Bank_Statement_Reference', index=False)
 
-def print_matching_summary(results: dict):
+def print_matching_summary(results: dict, discrepancies_by_type: dict, first_matched_date):
     """
     Print a summary of matching results.
     """
@@ -138,21 +194,25 @@ def print_matching_summary(results: dict):
     for match_type, count in matches_by_type.items():
         print(f"  - {match_type}: {count}")
     
-    # Show some example matches
-    print("\n=== EXAMPLE MATCHES ===")
-    example_count = 0
-    for date, date_results in results.items():
-        for card_type, match_info in date_results['matches_by_card_type'].items():
-            if example_count < 3:
-                print(f"\nDate: {date.date()}, Card Type: {card_type}")
-                print(f"Match Type: {match_info['match_type']}")
-                print(f"Expected: ${match_info['expected']:.2f}")
-                print(f"Bank Rows: {match_info['bank_rows']}")
-                example_count += 1
+    # Print discrepancies by card type
+    print("\n=== NET DISCREPANCIES BY CARD TYPE ===")
+    if first_matched_date:
+        print(f"(Calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards)\n")
+    
+    total_discrepancy = 0
+    for card_type, disc in sorted(discrepancies_by_type.items()):
+        if abs(disc) > 0.01:  # Only show non-zero discrepancies
+            if disc > 0:
+                print(f"{card_type}: +${disc:,.2f} (bank has more than expected)")
             else:
-                break
-        if example_count >= 3:
-            break
+                print(f"{card_type}: -${abs(disc):,.2f} (bank has less than expected)")
+            total_discrepancy += disc
+    
+    print(f"\nTotal net discrepancy: ${total_discrepancy:,.2f}")
+    if total_discrepancy > 0:
+        print("(Positive = bank statement total exceeds card summary expectations)")
+    elif total_discrepancy < 0:
+        print("(Negative = card summary expects more than bank statement shows)")
 
 if __name__ == "__main__":
     print("=== Transaction Matching System ===\n")
@@ -171,7 +231,7 @@ if __name__ == "__main__":
         exit(1)
     
     try:
-        card_summary = preprocess_card_summary(CARD_SUMMARY_PATH)
+        card_summary, structure_info = preprocess_card_summary_dynamic(CARD_SUMMARY_PATH)
         print(f"✓ Loaded card summary: {len(card_summary)} days")
     except Exception as e:
         print(f"✗ Error loading card summary: {e}")
@@ -197,32 +257,26 @@ if __name__ == "__main__":
     print("\nStep 4: Running matching algorithm...")
     results = matcher.match_transactions(card_summary, bank_statement, forward_days=3)
     
-    # Step 5: Generate summary and report
-    print("\nStep 5: Generating results...")
-    print_matching_summary(results)
+    # Step 5: Extract matched information
+    matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
+    
+    # Step 6: Calculate comprehensive discrepancies from bank statement perspective
+    print("\nStep 5: Calculating net discrepancies...")
+    discrepancies_by_type, first_matched_date = calculate_total_discrepancies_by_card_type(
+        results, bank_statement, matched_bank_rows
+    )
+    
+    # Step 7: Generate summary and report
+    print("\nStep 6: Generating results...")
+    print_matching_summary(results, discrepancies_by_type, first_matched_date)
     
     # Generate Excel report
     output_filename = 'matching_report_enhanced.xlsx'
     generate_enhanced_report(results, bank_statement, output_filename)
     print(f"\n✓ Detailed report saved to: {output_filename}")
     
-    # Step 6: Create highlighted copies of original files
-    print("\nStep 6: Creating highlighted copies of original files...")
-    
-    # Extract matched information including unmatched details
-    matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
-    
-    # DEBUG: Print what we're passing to the highlighting function
-    print("\n=== DEBUG: Card Summary Matching Info ===")
-    print(f"Number of dates with matches: {len(matched_dates_and_types)}")
-    if matched_dates_and_types:
-        # Show first 3 entries
-        for i, (date, card_types) in enumerate(list(matched_dates_and_types.items())[:3]):
-            print(f"Date: {date.strftime('%Y-%m-%d')}, Card Types: {card_types}")
-    
-    # Check card summary columns
-    temp_card_summary = preprocess_card_summary(CARD_SUMMARY_PATH)
-    print(f"\nCard Summary Columns: {[col for col in temp_card_summary.columns if col != 'Date' and not col.startswith('Unnamed')]}")
+    # Step 8: Create highlighted copies of original files
+    print("\nStep 7: Creating highlighted copies of original files...")
     
     # Create highlighted bank statement
     create_highlighted_bank_statement(
@@ -232,19 +286,24 @@ if __name__ == "__main__":
         differences_by_row=differences_by_row
     )
     
-    # Create highlighted card summary with unmatched info
-    create_highlighted_card_summary(
+    # Create highlighted card summary with comprehensive discrepancies
+    create_highlighted_card_summary_dynamic(
         card_summary_path=CARD_SUMMARY_PATH,
         matched_dates_and_types=matched_dates_and_types,
         output_path='card_summary_highlighted.xlsx',
-        skiprows=[0, 1, 3, 34],  # Same skiprows as used in preprocessing
         differences_info=differences_by_date_type,
-        unmatched_info=unmatched_info  # ADD THIS LINE
+        unmatched_info=unmatched_info,
+        differences_by_card_type=discrepancies_by_type  # Pass the net discrepancies
     )
-
+    
     # Final summary
     print("\n=== PROCESS COMPLETE ===")
     print("\nGenerated files:")
     print("  1. matching_report_enhanced.xlsx - Detailed matching report")
     print("  2. bank_statement_highlighted.xlsx - Bank statement with matched rows highlighted")
     print("  3. card_summary_highlighted.xlsx - Card summary with matched cells highlighted")
+    
+    # Show what's included in discrepancy calculation
+    if first_matched_date:
+        print(f"\nNote: Discrepancies calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards")
+        print("(Earlier bank transactions excluded as they belong to previous month)")

@@ -1,0 +1,6 @@
+trying to match totals against another document betweeen ssm vs td
+
+different consolidations may occur in different ways
+
+problem 1 - 
+discrepant values are not regular, sometimes they occur within 

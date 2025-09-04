@@ -1,43 +1,229 @@
 import pandas as pd
+import numpy as np
 
-def preprocess_card_summary(filepath='card summary june.xlsx', skiprows=[0, 1, 3, 34]):
+def detect_card_summary_structure(filepath='card summary june.xlsx'):
     """
-    Load and preprocess the card summary Excel file.
+    Dynamically detect the structure of a card summary file.
+    Returns the data rows and rows to skip.
+    """
+    # Read all rows first to analyze structure
+    df_raw = pd.read_excel(filepath, header=None)
     
-    Args:
-        filepath (str): Path to the card summary Excel file
-        skiprows (list): List of row indices to skip when reading the file
-        
-    Returns:
-        pd.DataFrame: Preprocessed card summary with date and card type columns
+    # Find the header row by looking for 'Date' in first column
+    header_row = None
+    for idx, row in df_raw.iterrows():
+        if pd.notna(row[0]) and 'Date' in str(row[0]):
+            header_row = idx
+            break
+    
+    if header_row is None:
+        raise ValueError("Could not find header row with 'Date'")
+    
+    # Find the first data row (first valid date after header)
+    data_start_row = None
+    for idx in range(header_row + 1, len(df_raw)):
+        try:
+            # Try to parse as date
+            pd.to_datetime(df_raw.iloc[idx, 0])
+            data_start_row = idx
+            break
+        except:
+            continue
+    
+    # Find the total row by looking for 'Total' in first column
+    total_row = None
+    for idx in range(data_start_row, len(df_raw)):
+        if pd.notna(df_raw.iloc[idx, 0]) and 'Total' in str(df_raw.iloc[idx, 0]):
+            total_row = idx
+            break
+    
+    # Find any empty rows between header and data start
+    skip_rows = []
+    
+    # Add rows before header
+    skip_rows.extend(range(header_row))
+    
+    # Add empty rows between header and data
+    for idx in range(header_row + 1, data_start_row):
+        skip_rows.append(idx)
+    
+    # Add total row if found
+    if total_row is not None:
+        skip_rows.append(total_row)
+    
+    print(f"Structure detected:")
+    print(f"  Header row: {header_row}")
+    print(f"  Data starts: {data_start_row}")
+    print(f"  Total row: {total_row}")
+    print(f"  Skip rows: {skip_rows}")
+    
+    return skip_rows, header_row, data_start_row, total_row
+
+def preprocess_card_summary_dynamic(filepath='card summary june.xlsx'):
     """
-    # Load the Excel file with specified rows to skip
-    card_summary = pd.read_excel(filepath, skiprows=skiprows)
+    Dynamically load and preprocess any card summary Excel file.
+    """
+    # Detect structure
+    skip_rows, header_row, data_start_row, total_row = detect_card_summary_structure(filepath)
+    
+    # Load the Excel file with detected skip rows
+    card_summary = pd.read_excel(filepath, skiprows=skip_rows)
     
     # Convert date to datetime
     card_summary['Date'] = pd.to_datetime(card_summary['Date'])
     
-    # Clean column names (remove any leading/trailing spaces)
+    # Clean column names
     card_summary.columns = card_summary.columns.str.strip()
     
-    # Convert all card type columns to numeric (except Date and any text columns)
-    # Get list of columns that should be numeric
+    # Convert numeric columns
     numeric_columns = [col for col in card_summary.columns 
                       if col not in ['Date'] and not col.startswith('Unnamed')]
     
-    # Convert to numeric, replacing any non-numeric values with 0
     for col in numeric_columns:
         card_summary[col] = pd.to_numeric(card_summary[col], errors='coerce').fillna(0)
     
-    return card_summary
+    # Return both the data and the structure info
+    return card_summary, {
+        'skip_rows': skip_rows,
+        'header_row': header_row,
+        'data_start_row': data_start_row,
+        'total_row': total_row
+    }
+
+# Updated highlighting function that uses dynamic structure
+def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_dates_and_types: dict,
+                                          output_path: str = 'card_summary_highlighted.xlsx',
+                                          differences_info: dict = None,
+                                          unmatched_info: dict = None, 
+                                          unmatched_bank_by_type: dict = None,
+                                          differences_by_card_type: dict = None):
+    """
+    Create highlighted card summary with dynamic structure detection.
+    Now with simplified total row comments showing just the sum of differences.
+    """
+    import shutil
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+    from openpyxl.comments import Comment
+    
+    # Get the structure info
+    card_summary_df, structure_info = preprocess_card_summary_dynamic(card_summary_path)
+    
+    # Copy the original Excel file
+    shutil.copy2(card_summary_path, output_path)
+    
+    # Load the workbook
+    workbook = load_workbook(output_path)
+    worksheet = workbook.active
+    
+    # Define highlight colors
+    green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
+    red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
+    
+    # Create mapping of dates to Excel rows
+    excel_row_mapping = {}
+    excel_row = structure_info['data_start_row'] + 1  # +1 for 1-based Excel rows
+    
+    for idx, row in card_summary_df.iterrows():
+        # Skip rows that were skipped in original
+        while (excel_row - 1) in structure_info['skip_rows']:
+            excel_row += 1
+        excel_row_mapping[row['Date']] = excel_row
+        excel_row += 1
+    
+    # Find column indices for card types
+    header_row = structure_info['header_row'] + 1  # +1 for 1-based Excel rows
+    column_mapping = {}
+    
+    for col_idx in range(1, worksheet.max_column + 1):
+        cell_value = worksheet.cell(row=header_row, column=col_idx).value
+        if cell_value:
+            column_mapping[str(cell_value).strip()] = col_idx
+    
+    # Process all data rows (not including total)
+    matched_cells_count = 0
+    unmatched_cells_count = 0
+    
+    for _, row in card_summary_df.iterrows():
+        date = row['Date']
+        excel_row = excel_row_mapping[date]
+        
+        # Process each card type
+        for card_type in column_mapping.keys():
+            if card_type in ['Date', 'Total', 'Visa & MC'] or card_type.startswith('Unnamed'):
+                continue
+                
+            if card_type in column_mapping and card_type in row.index:
+                expected_amount = row[card_type]
+                if pd.notna(expected_amount) and expected_amount != 0:
+                    col_idx = column_mapping[card_type]
+                    cell = worksheet.cell(row=excel_row, column=col_idx)
+                    
+                    # Check if matched
+                    if matched_dates_and_types and date in matched_dates_and_types and card_type in matched_dates_and_types[date]:
+                        cell.fill = green_fill
+                        matched_cells_count += 1
+                    elif unmatched_info and (date, card_type) in unmatched_info:
+                        cell.fill = red_fill
+                        unmatched_cells_count += 1
+                        
+                        # Add comment
+                        info = unmatched_info[(date, card_type)]
+                        comment_text = f"Expected: ${expected_amount:,.2f}\n"
+                        comment_text += f"Found in UNMATCHED transactions: ${info.get('total_found', 0):,.2f}\n"
+                        comment_text += f"Difference: ${info.get('total_found', 0) - expected_amount:,.2f}\n"
+                        comment_text += f"Unmatched transactions available: {info.get('found_transactions', 0)}\n"
+                        comment_text += "\nNote: 'Found' amount excludes transactions already matched elsewhere"
+                        
+                        cell.comment = Comment(comment_text, "Matching System")
+    
+    # Handle total row with simplified differences if provided
+    if structure_info['total_row'] is not None and differences_by_card_type:
+        total_excel_row = structure_info['total_row'] + 1  # +1 for Excel
+        
+        for card_type, col_idx in column_mapping.items():
+            if card_type in differences_by_card_type and card_type not in ['Date', 'Total', 'Visa & MC']:
+                diff = differences_by_card_type[card_type]
+                # Only add comment if there's a non-zero difference
+                if abs(diff) > 0.01:
+                    cell = worksheet.cell(row=total_excel_row, column=col_idx)
+                    
+                    comment_text = f"Net Discrepancy:\n${diff:,.2f}"
+                    if diff > 0:
+                        comment_text += "\n\n(Bank has ${abs(diff):,.2f} MORE than expected)"
+                        comment_text += "\nPossible causes: duplicate transactions,\nunexpected charges, or misclassified items"
+                    else:
+                        comment_text += "\n\n(Bank has ${abs(diff):,.2f} LESS than expected)"
+                        comment_text += "\nPossible causes: missing transactions,\nunprocessed charges, or timing differences"
+                    
+                    cell.comment = Comment(comment_text, "Difference Summary")
+    
+    # Save
+    workbook.save(output_path)
+    workbook.close()
+    
+    print(f"✓ Created highlighted card summary: {output_path}")
+    print(f"  - Detected {len(card_summary_df)} data rows")
+    print(f"  - Matched cells (green): {matched_cells_count}")
+    print(f"  - Unmatched cells with comments (red): {unmatched_cells_count}")
+    if differences_by_card_type:
+        non_zero_diffs = sum(1 for d in differences_by_card_type.values() if abs(d) > 0.01)
+        if non_zero_diffs > 0:
+            print(f"  - Total row differences shown for {non_zero_diffs} card types")
 
 if __name__ == "__main__":
-    # Test the function
-    df = preprocess_card_summary()
-    print("Card Summary Preview:")
-    print(df.head())
-    print(f"\nColumns: {df.columns.tolist()}")
-    print(f"Shape: {df.shape}")
-    print(f"Date range: {df['Date'].min()} to {df['Date'].max()}")
-    print(f"\nData types:")
-    print(df.dtypes)
+    # Test with different files
+    test_files = [
+        'card summary june.xlsx',  # 30 days
+        # 'card summary july.xlsx',  # 31 days
+        # 'card summary feb.xlsx',   # 28/29 days
+    ]
+    
+    for file in test_files:
+        try:
+            print(f"\nTesting {file}:")
+            df, info = preprocess_card_summary_dynamic(file)
+            print(f"Successfully loaded {len(df)} days")
+            print(f"Date range: {df['Date'].min()} to {df['Date'].max()}")
+        except Exception as e:
+            print(f"Error: {e}")

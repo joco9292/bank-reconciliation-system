@@ -199,14 +199,18 @@ class TransactionMatcher:
     def match_transactions(self, card_summary: pd.DataFrame, bank_statement: pd.DataFrame, 
                           forward_days: int = 3) -> Dict:
         """
-        Match transactions using the filter pipeline.
+        Match transactions using the filter pipeline with two-pass approach.
+        Pass 1: Match all transactions normally
+        Pass 2: For unmatched card summary cells, calculate totals using only unmatched bank transactions
         """
         results = {}
+        matched_bank_rows = set()  # Track all matched bank rows across all dates
         
         # Card types to process
         card_types = [col for col in card_summary.columns 
                       if col not in ['Date', 'Total', 'Visa & MC'] and not col.startswith('Unnamed')]
         
+        # PASS 1: Do all matching
         for _, card_row in card_summary.iterrows():
             date = card_row['Date']
             date_results = {
@@ -230,7 +234,9 @@ class TransactionMatcher:
                     date_results['unmatched_by_card_type'][card_type] = {
                         'expected': expected_amount,
                         'reason': 'No transactions found for card type in date range',
-                        'bank_rows': []
+                        'bank_rows': [],
+                        'found_transactions': 0,
+                        'total_found': 0
                     }
                     continue
                 
@@ -250,18 +256,54 @@ class TransactionMatcher:
                             **{k: v for k, v in result.items() 
                                if k not in ['matched', 'match_type', 'transactions', 'bank_rows', 'actual_total', 'difference']}
                         }
+                        # Track matched bank rows
+                        matched_bank_rows.update(result['bank_rows'])
                         matched = True
                         break
                 
                 if not matched:
+                    # Store preliminary unmatched info - will update in Pass 2
                     date_results['unmatched_by_card_type'][card_type] = {
                         'expected': expected_amount,
-                        'found_transactions': len(filtered_transactions),
-                        'total_found': filtered_transactions['Amount'].sum(),
-                        'reason': 'No match found after all filters',
-                        'bank_rows': filtered_transactions['Bank_Row_Number'].tolist()
+                        'date': date,
+                        'card_type': card_type,
+                        'forward_days': forward_days
                     }
             
             results[date] = date_results
+        
+        # PASS 2: Recalculate unmatched totals using only unmatched bank transactions
+        print("\nPass 2: Calculating unmatched transaction totals...")
+        for date, date_results in results.items():
+            for card_type, unmatch_info in date_results['unmatched_by_card_type'].items():
+                if 'date' in unmatch_info:  # Only process those that need recalculation
+                    # Get transactions for this card type and date range
+                    filtered_transactions = filter_by_card_type_and_date(
+                        bank_statement, 
+                        unmatch_info['card_type'], 
+                        unmatch_info['date'], 
+                        unmatch_info['forward_days']
+                    )
+                    
+                    # Filter out already matched transactions
+                    unmatched_only = filtered_transactions[
+                        ~filtered_transactions['Bank_Row_Number'].isin(matched_bank_rows)
+                    ]
+                    
+                    # Update with accurate unmatched-only totals
+                    date_results['unmatched_by_card_type'][card_type] = {
+                        'expected': unmatch_info['expected'],
+                        'found_transactions': len(unmatched_only),
+                        'total_found': unmatched_only['Amount'].sum() if len(unmatched_only) > 0 else 0,
+                        'reason': 'No match found after all filters',
+                        'bank_rows': unmatched_only['Bank_Row_Number'].tolist()
+                    }
+                    
+                    # Debug output for significant unmatched amounts
+                    if unmatch_info['expected'] > 1000:
+                        print(f"  {unmatch_info['date'].strftime('%Y-%m-%d')} {card_type}: "
+                              f"Expected ${unmatch_info['expected']:,.2f}, "
+                              f"Found ${unmatched_only['Amount'].sum():,.2f} "
+                              f"in {len(unmatched_only)} unmatched transactions")
         
         return results

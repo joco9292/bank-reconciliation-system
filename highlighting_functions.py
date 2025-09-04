@@ -59,7 +59,7 @@ def create_highlighted_bank_statement(bank_statement_path: str, matched_bank_row
 def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_types: dict,
                                   output_path: str = 'card_summary_highlighted.xlsx',
                                   skiprows=[0, 1, 3, 34], differences_info: dict = None,
-                                  unmatched_info: dict = None):
+                                  unmatched_info: dict = None, unmatched_bank_by_type: dict = None):
     """
     Create a highlighted copy of the card summary with matched cells highlighted and unmatched cells commented.
     
@@ -70,6 +70,7 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
         skiprows (list): Row indices that were skipped in original processing
         differences_info (dict): Optional dict with (date, card_type) tuples as keys and differences as values
         unmatched_info (dict): Dict with information about unmatched cells
+        unmatched_bank_by_type (dict): Dict with unmatched bank transactions by card type, now includes date filter info
     """
     from dict import mapping
     
@@ -111,10 +112,22 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
     matched_cells_count = 0
     unmatched_cells_count = 0
     
-    # Process all cells in the card summary
+    # Find the total row first
+    total_row = None
+    for row in range(worksheet.max_row, 0, -1):
+        cell_value = worksheet.cell(row=row, column=1).value
+        if cell_value and 'Total' in str(cell_value):
+            total_row = row
+            break
+
+    # Process all data rows
     for _, row in card_summary_df.iterrows():
         date = row['Date']
         excel_row = excel_row_mapping[date]
+        
+        # Skip highlighting if this is the total row
+        if total_row and excel_row == total_row:
+            continue
         
         # Check each card type column
         for card_type in column_mapping.keys():
@@ -123,7 +136,7 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
                 
             if card_type in column_mapping and card_type in row.index:
                 expected_amount = row[card_type]
-                if pd.notna(expected_amount) and expected_amount > 0:
+                if pd.notna(expected_amount) and expected_amount != 0:
                     col_idx = column_mapping[card_type]
                     cell = worksheet.cell(row=excel_row, column=col_idx)
                     
@@ -146,16 +159,42 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
                         
                         comment_lines = []
                         comment_lines.append(f"Expected: ${expected:,.2f}")
-                        comment_lines.append(f"Found: ${total_found:,.2f}")
+                        comment_lines.append(f"Found in UNMATCHED transactions: ${total_found:,.2f}")
                         comment_lines.append(f"Difference: ${difference:,.2f}")
-                        comment_lines.append(f"Transactions found: {found_count}")
+                        comment_lines.append(f"Unmatched transactions available: {found_count}")
                         if info.get('reason'):
                             comment_lines.append(f"Reason: {info['reason']}")
+                        comment_lines.append("\nNote: 'Found' amount excludes transactions already matched elsewhere")
                         
                         comment_text = "\n".join(comment_lines)
                         cell.comment = Comment(comment_text, "Matching System")
-                        
-                        print(f"  Added unmatched comment to {date.strftime('%Y-%m-%d')}, {card_type}")
+    
+    # Add unmatched BANK STATEMENT totals to the Total row with date filtering info
+    if total_row and unmatched_bank_by_type:
+        # Add comments to total row cells
+        for card_type, col_idx in column_mapping.items():
+            if card_type in unmatched_bank_by_type and card_type not in ['Date', 'Total', 'Visa & MC']:
+                cell = worksheet.cell(row=total_row, column=col_idx)
+                totals = unmatched_bank_by_type[card_type]
+                
+                comment_lines = []
+                comment_lines.append(f"Unmatched bank transactions:")
+                
+                # Add date filter information if applicable
+                if totals.get('date_filter_applied', False) and totals.get('first_matched_date'):
+                    first_date = totals['first_matched_date']
+                    comment_lines.append(f"Counting from: {first_date.strftime('%Y-%m-%d')} (first match)")
+                elif not totals.get('date_filter_applied', False):
+                    comment_lines.append(f"All transactions (no matches found)")
+                
+                comment_lines.append(f"Total: ${totals['total']:,.2f}")
+                comment_lines.append(f"Count: {totals['count']} transactions")
+                comment_lines.append(f"\nBank rows: {', '.join(map(str, totals['rows'][:10]))}")
+                if totals['count'] > 10:
+                    comment_lines.append(f"... and {totals['count'] - 10} more")
+                
+                comment_text = "\n".join(comment_lines)
+                cell.comment = Comment(comment_text, "Bank Statement Summary")
     
     # Save the workbook
     workbook.save(output_path)
@@ -165,6 +204,8 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
     print(f"  - Total dates: {len(card_summary_df)}")
     print(f"  - Matched cells (green): {matched_cells_count}")
     print(f"  - Unmatched cells with comments (red): {unmatched_cells_count}")
+    if total_row and unmatched_bank_by_type:
+        print(f"  - Total row comments added for unmatched bank transactions: {len([k for k in unmatched_bank_by_type.keys() if k in column_mapping])}")
 
 def extract_matched_info_from_results(results: dict) -> tuple:
     """
