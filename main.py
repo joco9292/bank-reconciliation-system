@@ -20,6 +20,20 @@ from highlighting_functions import (
     extract_matched_info_from_results
 )
 
+from exclusive_discrepancy import (
+    calculate_total_discrepancies_by_card_type_exclusive,
+    find_first_matched_date,
+    print_matching_summary_with_exclusive_allocation
+)
+
+# Import multi-bank processor if using multiple banks
+try:
+    from multi_bank_processor import process_with_multiple_bank_statements
+    MULTI_BANK_AVAILABLE = True
+except ImportError:
+    MULTI_BANK_AVAILABLE = False
+    print("Note: multi_bank_processor.py not found. Multi-bank support disabled.")
+
 def prepare_data_for_matching(card_summary: pd.DataFrame, bank_statement: pd.DataFrame) -> tuple:
     """
     Add additional columns needed for matching process.
@@ -99,6 +113,14 @@ def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame,
     unmatched_data = []
     
     for date, date_results in results.items():
+        # Skip metadata entries (strings that start with underscore)
+        if isinstance(date, str) and date.startswith('_'):
+            continue
+            
+        # Also skip if date_results is not a dictionary with expected structure
+        if not isinstance(date_results, dict) or 'matches_by_card_type' not in date_results:
+            continue
+        
         # Matched transactions
         for card_type, match_info in date_results['matches_by_card_type'].items():
             summary_data.append({
@@ -145,6 +167,8 @@ def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame,
             })
     
     # Create Excel report with formatting
+    from openpyxl.styles import PatternFill
+    
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         if summary_data:
             summary_df = pd.DataFrame(summary_data)
@@ -214,118 +238,6 @@ def print_matching_summary(results: dict, discrepancies_by_type: dict, first_mat
     elif total_discrepancy < 0:
         print("(Negative = card summary expects more than bank statement shows)")
 
-if __name__ == "__main__":
-    print("=== Transaction Matching System ===\n")
-    
-    # Store file paths for later use
-    BANK_STATEMENT_PATH = 'june 2025 bank statement.CSV'
-    CARD_SUMMARY_PATH = 'XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (3).xlsx'
-    
-    # Step 1: Load and preprocess data
-    print("Step 1: Loading and preprocessing data...")
-    try:
-        bank_statement = preprocess_bank_statement(BANK_STATEMENT_PATH)
-        print(f"✓ Loaded bank statement: {len(bank_statement)} transactions")
-    except Exception as e:
-        print(f"✗ Error loading bank statement: {e}")
-        exit(1)
-    
-    try:
-        card_summary, structure_info = preprocess_card_summary_dynamic(CARD_SUMMARY_PATH)
-        print(f"✓ Loaded card summary: {len(card_summary)} days")
-    except Exception as e:
-        print(f"✗ Error loading card summary: {e}")
-        exit(1)
-    
-    # Step 2: Prepare data for matching
-    print("\nStep 2: Preparing data for matching...")
-    card_summary, bank_statement = prepare_data_for_matching(card_summary, bank_statement)
-    
-    # Show card type distribution
-    print("\nCard types identified in bank statement:")
-    print(bank_statement['Card_Type'].value_counts())
-    
-    # Step 3: Create matcher with card-type-specific filters
-    print("\nStep 3: Setting up transaction matcher with card-type-specific filters...")
-    matcher = TransactionMatcher()
-    
-    # OPTION 1: Add filters to specific card types only
-    # This adds amount_range ONLY for Amex transactions
-    matcher.add_filter('amount_range', filter_by_amount_range, card_types=['Amex'])
-    
-    # OPTION 2: You can also add filters to multiple specific card types
-    # matcher.add_filter('split_transactions', filter_split_transactions, 
-    #                   card_types=['Discover', 'Other Cards'])
-    
-    # OPTION 3: Add a filter to ALL card types (default behavior)
-    # matcher.add_filter('new_filter', new_filter_function)  # No card_types param = applies to all
-    
-    # OPTION 4: You can also modify the class initialization directly to set up
-    # card-specific filters (see the TransactionMatcher.__init__ method)
-    
-    # Alternative approach: Create a custom matcher with specific configuration
-    # custom_matcher = create_custom_matcher()
-    
-    # Step 4: Run matching algorithm with verbose output to see which filters are used
-    print("\nStep 4: Running matching algorithm...")
-    print("Note: amount_range filter will ONLY be applied to Amex transactions\n")
-    
-    # Set verbose=True to see which filters are applied to each card type
-    results = matcher.match_transactions(card_summary, bank_statement, 
-                                        forward_days=3, verbose=False)
-    
-    # Rest of your main.py code remains the same...
-    # Step 5: Extract matched information
-    matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
-    
-    # Step 6: Calculate comprehensive discrepancies from bank statement perspective
-    print("\nStep 5: Calculating net discrepancies...")
-    discrepancies_by_type, first_matched_date = calculate_total_discrepancies_by_card_type(
-        results, bank_statement, matched_bank_rows
-    )
-    
-    # Step 7: Generate summary and report
-    print("\nStep 6: Generating results...")
-    print_matching_summary(results, discrepancies_by_type, first_matched_date)
-    
-    # Generate Excel report
-    output_filename = 'matching_report_enhanced.xlsx'
-    generate_enhanced_report(results, bank_statement, output_filename)
-    print(f"\n✓ Detailed report saved to: {output_filename}")
-    
-    # Step 8: Create highlighted copies of original files
-    print("\nStep 7: Creating highlighted copies of original files...")
-    
-    # Create highlighted bank statement
-    create_highlighted_bank_statement(
-        bank_statement_path=BANK_STATEMENT_PATH,
-        matched_bank_rows=matched_bank_rows,
-        output_path='bank_statement_highlighted.xlsx',
-        differences_by_row=differences_by_row
-    )
-    
-    # Create highlighted card summary with comprehensive discrepancies
-    create_highlighted_card_summary_dynamic(
-        card_summary_path=CARD_SUMMARY_PATH,
-        matched_dates_and_types=matched_dates_and_types,
-        output_path='card_summary_highlighted.xlsx',
-        differences_info=differences_by_date_type,
-        unmatched_info=unmatched_info,
-        differences_by_card_type=discrepancies_by_type
-    )
-    
-    # Final summary
-    print("\n=== PROCESS COMPLETE ===")
-    print("\nGenerated files:")
-    print("  1. matching_report_enhanced.xlsx - Detailed matching report")
-    print("  2. bank_statement_highlighted.xlsx - Bank statement with matched rows highlighted")
-    print("  3. card_summary_highlighted.xlsx - Card summary with matched cells highlighted")
-    
-    if first_matched_date:
-        print(f"\nNote: Discrepancies calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards")
-        print("(Earlier bank transactions excluded as they belong to previous month)")
-
-
 # Optional: Create a function to build a custom matcher with complex configurations
 def create_custom_matcher():
     """
@@ -353,3 +265,135 @@ def create_custom_matcher():
                       card_types=['Master Card'])
     
     return matcher
+
+if __name__ == "__main__":
+    print("=== Transaction Matching System ===\n")
+    
+    # ============================================
+    # CONFIGURATION SECTION - MODIFY THESE VALUES
+    # ============================================
+    
+    # Set to True when you have a separate Discover bank statement
+    USE_MULTIPLE_BANKS = False  # Change to True when using multiple bank statements
+    
+    # File paths for single bank processing
+    SINGLE_BANK_STATEMENT_PATH = 'july 2025 bank statement.CSV'
+    CARD_SUMMARY_PATH = 'XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (3) (1).xlsx'
+    
+    # File paths for multi-bank processing
+    MAIN_BANK_STATEMENT_PATH = 'july 2025 bank statement.CSV'
+    DISCOVER_BANK_STATEMENT_PATH = 'discover_july_2025_statement.CSV'  # Add your Discover file name here
+    
+    # ============================================
+    # END CONFIGURATION
+    # ============================================
+    
+    if USE_MULTIPLE_BANKS and MULTI_BANK_AVAILABLE:
+        # ===========================
+        # MULTI-BANK PROCESSING MODE
+        # ===========================
+        print("Running in MULTI-BANK mode\n")
+        
+        results = process_with_multiple_bank_statements(
+            main_bank_statement_path=MAIN_BANK_STATEMENT_PATH,
+            discover_bank_statement_path=DISCOVER_BANK_STATEMENT_PATH,
+            card_summary_path=CARD_SUMMARY_PATH,
+            output_dir='.',
+            verbose=False
+        )
+        
+    else:
+        # ============================
+        # SINGLE BANK PROCESSING MODE
+        # ============================
+        if USE_MULTIPLE_BANKS and not MULTI_BANK_AVAILABLE:
+            print("WARNING: Multi-bank mode requested but multi_bank_processor.py not found")
+            print("Falling back to single bank mode\n")
+        else:
+            print("Running in SINGLE BANK mode\n")
+        
+        # Step 1: Load and preprocess data
+        print("Step 1: Loading and preprocessing data...")
+        try:
+            bank_statement = preprocess_bank_statement(SINGLE_BANK_STATEMENT_PATH)
+            print(f"✓ Loaded bank statement: {len(bank_statement)} transactions")
+        except Exception as e:
+            print(f"✗ Error loading bank statement: {e}")
+            exit(1)
+        
+        try:
+            card_summary, structure_info = preprocess_card_summary_dynamic(CARD_SUMMARY_PATH)
+            print(f"✓ Loaded card summary: {len(card_summary)} days")
+        except Exception as e:
+            print(f"✗ Error loading card summary: {e}")
+            exit(1)
+        
+        # Step 2: Prepare data for matching
+        print("\nStep 2: Preparing data for matching...")
+        card_summary, bank_statement = prepare_data_for_matching(card_summary, bank_statement)
+        
+        # Show card type distribution
+        print("\nCard types identified in bank statement:")
+        print(bank_statement['Card_Type'].value_counts())
+        
+        # Step 3: Create matcher with card-type-specific filters
+        print("\nStep 3: Setting up transaction matcher with card-type-specific filters...")
+        matcher = TransactionMatcher()
+        
+        # Add card-type-specific filters
+        matcher.add_filter('amount_range', filter_by_amount_range, card_types=['Amex'])
+        
+        # Step 4: Run matching algorithm
+        print("\nStep 4: Running matching algorithm...")
+        results = matcher.match_transactions(card_summary, bank_statement, 
+                                            forward_days=3, verbose=False)
+        
+        # Step 5: Extract matched information
+        matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
+        
+        # Step 6: Calculate comprehensive discrepancies with EXCLUSIVE allocation
+        print("\nStep 5: Calculating net discrepancies (exclusive allocation)...")
+        discrepancies_by_type, first_matched_date = calculate_total_discrepancies_by_card_type_exclusive(
+            results, bank_statement, matched_bank_rows
+        )
+        
+        # Step 7: Generate summary with exclusive allocation details
+        print("\nStep 6: Generating results...")
+        print_matching_summary_with_exclusive_allocation(results, discrepancies_by_type, first_matched_date)
+        
+        # Generate Excel report
+        output_filename = 'matching_report_enhanced.xlsx'
+        generate_enhanced_report(results, bank_statement, output_filename)
+        print(f"\n✓ Detailed report saved to: {output_filename}")
+        
+        # Step 8: Create highlighted copies of original files
+        print("\nStep 7: Creating highlighted copies of original files...")
+        
+        # Create highlighted bank statement
+        create_highlighted_bank_statement(
+            bank_statement_path=SINGLE_BANK_STATEMENT_PATH,
+            matched_bank_rows=matched_bank_rows,
+            output_path='bank_statement_highlighted.xlsx',
+            differences_by_row=differences_by_row
+        )
+        
+        # Create highlighted card summary with comprehensive discrepancies
+        create_highlighted_card_summary_dynamic(
+            card_summary_path=CARD_SUMMARY_PATH,
+            matched_dates_and_types=matched_dates_and_types,
+            output_path='card_summary_highlighted.xlsx',
+            differences_info=differences_by_date_type,
+            unmatched_info=unmatched_info,
+            differences_by_card_type=discrepancies_by_type
+        )
+        
+        # Final summary
+        print("\n=== PROCESS COMPLETE ===")
+        print("\nGenerated files:")
+        print("  1. matching_report_enhanced.xlsx - Detailed matching report")
+        print("  2. bank_statement_highlighted.xlsx - Bank statement with matched rows highlighted")
+        print("  3. card_summary_highlighted.xlsx - Card summary with matched cells highlighted")
+        
+        if first_matched_date:
+            print(f"\nNote: Discrepancies calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards")
+            print("(Earlier bank transactions excluded as they belong to previous month)")

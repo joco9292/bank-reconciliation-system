@@ -224,6 +224,14 @@ def extract_matched_info_from_results(results: dict) -> tuple:
     unmatched_info = {}
     
     for date, date_results in results.items():
+        # Skip metadata keys that start with underscore
+        if isinstance(date, str) and date.startswith('_'):
+            continue
+        
+        # Also skip if date_results is not a dictionary with expected structure
+        if not isinstance(date_results, dict) or 'matches_by_card_type' not in date_results:
+            continue
+            
         matched_types = []
         
         # Process matched transactions

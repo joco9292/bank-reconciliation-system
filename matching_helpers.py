@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Callable, Optional, Optional, Set
+from typing import Dict, List, Callable, Optional, Set
 from itertools import combinations
 
 def identify_card_type(description: str) -> str:
@@ -24,7 +24,9 @@ def identify_card_type(description: str) -> str:
         'Visa': [r'(?<!debit\s)visa(?!.*debit)', r'(?<!dbt\s)vs(?!.*dbt)'],
         'Discover': [r'discover', r'disc(?!.*debit)'],
         'Amex': [r'amex', r'american\s*express', r'amx'],
-        'Other Cards': [r'other', r'misc']
+        'Other Cards': [r'other', r'misc'],
+        'Cash': [r'GC 1416'],
+        'Check': [r'GC 1416']
     }
     
     for card_type, patterns in card_patterns.items():
@@ -112,12 +114,10 @@ def filter_sum_by_description(transactions: pd.DataFrame, expected_amount: float
     
     return {'matched': False}
 
-
-# make this have a hard cap otuside of just the percentage base
 def filter_by_amount_range(transactions: pd.DataFrame, expected_amount: float,
                           percentage_tolerance: float = 0.03) -> Dict:
     """
-    Filter 4: Match within percentage range (e.g., 5% tolerance).
+    Filter 4: Match within percentage range (e.g., 3% tolerance).
     """
     lower_bound = expected_amount * (1 - percentage_tolerance)
     upper_bound = expected_amount * (1 + percentage_tolerance)
@@ -176,6 +176,7 @@ def filter_split_transactions(transactions: pd.DataFrame, expected_amount: float
 class TransactionMatcher:
     """
     Extensible transaction matching engine with card-type-specific filtering.
+    Now with exclusive transaction allocation for discrepancy calculations.
     """
     def __init__(self):
         # Define the default filter pipeline
@@ -185,33 +186,19 @@ class TransactionMatcher:
         ]
         
         # Define card-type-specific filters
-        # Format: {card_type: [(filter_name, filter_func), ...]}
         self.card_specific_filters = {
             'Amex': [
                 ('amount_range', filter_by_amount_range),
             ],
-            # Add more card-specific filters here as needed
-            # 'Discover': [
-            #     ('split_transactions', filter_split_transactions),
-            # ],
         }
         
         # Optional: Define filters to exclude for specific card types
-        self.excluded_filters = {
-            # Example: 'Debit Visa': ['sum_by_description']
-        }
+        self.excluded_filters = {}
     
     def add_filter(self, name: str, filter_func: Callable, position: int = None, 
                    card_types: Optional[List[str]] = None):
         """
         Add a new filter to the pipeline.
-        
-        Args:
-            name: Name of the filter
-            filter_func: Filter function to apply
-            position: Position in default pipeline (None = append to end)
-            card_types: Optional list of card types this filter applies to.
-                       If None, applies to all card types.
         """
         if card_types is None:
             # Add to default pipeline
@@ -229,12 +216,6 @@ class TransactionMatcher:
     def get_filters_for_card_type(self, card_type: str) -> List[tuple]:
         """
         Get the appropriate filter pipeline for a given card type.
-        
-        Args:
-            card_type: The card type to get filters for
-            
-        Returns:
-            List of (filter_name, filter_func) tuples
         """
         # Start with default filters
         filters = self.default_filters.copy()
@@ -255,15 +236,13 @@ class TransactionMatcher:
                           forward_days: int = 3, verbose: bool = False) -> Dict:
         """
         Match transactions using the filter pipeline with card-type-specific filters.
-        
-        Args:
-            card_summary: DataFrame with expected transactions by card type
-            bank_statement: DataFrame with actual bank transactions
-            forward_days: Number of days forward to look for matches
-            verbose: If True, print debug information about filter usage
+        Now ensures exclusive transaction allocation for discrepancy calculations.
         """
         results = {}
         matched_bank_rows = set()
+        
+        # NEW: Track which bank rows are allocated to which cell for discrepancy calculations
+        allocated_for_discrepancy = {}  # {bank_row: (date, card_type)}
         
         # Card types to process
         card_types = [col for col in card_summary.columns 
@@ -346,40 +325,65 @@ class TransactionMatcher:
             
             results[date] = date_results
         
-        # PASS 2: Recalculate unmatched totals using only unmatched bank transactions
+        # PASS 2: Calculate EXCLUSIVE unmatched totals for discrepancy calculations
+        # Each unmatched bank transaction is allocated to at most ONE cell
         if not verbose:
-            print("\nPass 2: Calculating unmatched transaction totals...")
+            print("\nPass 2: Calculating exclusive unmatched transaction totals...")
         
+        # Sort unmatched cells by expected amount (descending) to prioritize larger discrepancies
+        unmatched_cells = []
         for date, date_results in results.items():
             for card_type, unmatch_info in date_results['unmatched_by_card_type'].items():
-                if 'date' in unmatch_info:  # Only process those that need recalculation
-                    # Get transactions for this card type and date range
-                    filtered_transactions = filter_by_card_type_and_date(
-                        bank_statement, 
-                        unmatch_info['card_type'], 
-                        unmatch_info['date'], 
-                        unmatch_info['forward_days']
-                    )
-                    
-                    # Filter out already matched transactions
-                    unmatched_only = filtered_transactions[
-                        ~filtered_transactions['Bank_Row_Number'].isin(matched_bank_rows)
-                    ]
-                    
-                    # Update with accurate unmatched-only totals
-                    date_results['unmatched_by_card_type'][card_type] = {
-                        'expected': unmatch_info['expected'],
-                        'found_transactions': len(unmatched_only),
-                        'total_found': unmatched_only['Amount'].sum() if len(unmatched_only) > 0 else 0,
-                        'reason': f"No match found after trying filters: {unmatch_info.get('filters_tried', [])}",
-                        'bank_rows': unmatched_only['Bank_Row_Number'].tolist()
-                    }
-                    
-                    # Debug output for significant unmatched amounts
-                    if unmatch_info['expected'] > 1000 and not verbose:
-                        print(f"  {unmatch_info['date'].strftime('%Y-%m-%d')} {card_type}: "
-                              f"Expected ${unmatch_info['expected']:,.2f}, "
-                              f"Found ${unmatched_only['Amount'].sum():,.2f} "
-                              f"in {len(unmatched_only)} unmatched transactions")
+                if 'date' in unmatch_info:
+                    unmatched_cells.append((date, card_type, unmatch_info))
+        
+        unmatched_cells.sort(key=lambda x: x[2]['expected'], reverse=True)
+        
+        # Allocate unmatched bank transactions exclusively
+        for date, card_type, unmatch_info in unmatched_cells:
+            # Get transactions for this card type and date range
+            filtered_transactions = filter_by_card_type_and_date(
+                bank_statement, 
+                unmatch_info['card_type'], 
+                unmatch_info['date'], 
+                unmatch_info['forward_days']
+            )
+            
+            # Filter out already matched transactions
+            unmatched_only = filtered_transactions[
+                ~filtered_transactions['Bank_Row_Number'].isin(matched_bank_rows)
+            ]
+            
+            # NEW: Also filter out transactions already allocated to other cells
+            available_for_this_cell = []
+            for _, trans in unmatched_only.iterrows():
+                bank_row = trans['Bank_Row_Number']
+                if bank_row not in allocated_for_discrepancy:
+                    available_for_this_cell.append(trans)
+                    # Mark this transaction as allocated to this cell
+                    allocated_for_discrepancy[bank_row] = (date, card_type)
+            
+            available_df = pd.DataFrame(available_for_this_cell) if available_for_this_cell else pd.DataFrame()
+            
+            # Update with accurate EXCLUSIVE unmatched totals
+            results[date]['unmatched_by_card_type'][card_type] = {
+                'expected': unmatch_info['expected'],
+                'found_transactions': len(available_df),
+                'total_found': available_df['Amount'].sum() if len(available_df) > 0 else 0,
+                'reason': f"No match found after trying filters: {unmatch_info.get('filters_tried', [])}",
+                'bank_rows': available_df['Bank_Row_Number'].tolist() if len(available_df) > 0 else [],
+                'exclusive_allocation': True  # Flag to indicate exclusive allocation was used
+            }
+            
+            # Debug output for significant unmatched amounts
+            if unmatch_info['expected'] > 1000 and not verbose:
+                total_found = available_df['Amount'].sum() if len(available_df) > 0 else 0
+                print(f"  {unmatch_info['date'].strftime('%Y-%m-%d')} {card_type}: "
+                      f"Expected ${unmatch_info['expected']:,.2f}, "
+                      f"Found ${total_found:,.2f} "
+                      f"in {len(available_df)} EXCLUSIVELY allocated transactions")
+        
+        # Add allocation info to results for reporting
+        results['_allocated_for_discrepancy'] = allocated_for_discrepancy
         
         return results
