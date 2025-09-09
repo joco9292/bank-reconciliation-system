@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'processors'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'matchers'))
 import pandas as pd
 from datetime import datetime
 from openpyxl.styles import PatternFill
@@ -277,12 +281,12 @@ if __name__ == "__main__":
     USE_MULTIPLE_BANKS = False  # Change to True when using multiple bank statements
     
     # File paths for single bank processing
-    SINGLE_BANK_STATEMENT_PATH = 'july 2025 bank statement.CSV'
-    CARD_SUMMARY_PATH = 'XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (3) (1).xlsx'
+    SINGLE_BANK_STATEMENT_PATH = 'data/june 2025 bank statement.CSV'
+    CARD_SUMMARY_PATH = 'data/XYZ Storage Laird - CreditCardSummary - 06-01-2025 - 06-30-2025.xlsx'
     
     # File paths for multi-bank processing
-    MAIN_BANK_STATEMENT_PATH = 'july 2025 bank statement.CSV'
-    DISCOVER_BANK_STATEMENT_PATH = 'discover_july_2025_statement.CSV'  # Add your Discover file name here
+    MAIN_BANK_STATEMENT_PATH = 'data/july 2025 bank statement.CSV'
+    DISCOVER_BANK_STATEMENT_PATH = 'data/discover_july_2025_statement.CSV'  # Add your Discover file name here
     
     # ============================================
     # END CONFIGURATION

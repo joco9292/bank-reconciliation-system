@@ -125,8 +125,7 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
     # Define highlight colors
     green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
     red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
-    yellow_fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid')  # For partial matches
-    
+    yellow_fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid')  # Add this
     # Create mapping of dates to Excel rows
     excel_row_mapping = {}
     excel_row = structure_info['data_start_row'] + 1
@@ -183,6 +182,37 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                             # Check if partially matched (e.g., Cash matched but Check didn't)
                             if any(dt in matched_dates_and_types[date] for dt in structure_info['deposit_columns']):
                                 cell.fill = yellow_fill  # Partial match for the date
+
+                    # NEW: Check for best match (yellow highlighting)
+                    elif unmatched_info and (date, deposit_type) in unmatched_info:
+                        info = unmatched_info[(date, deposit_type)]
+                        
+                        # Check if this has a best_match stored
+                        if 'best_match' in info and info['best_match'] and info['best_match']['total'] > 0:
+                            # Yellow for approximate matches
+                            cell.fill = yellow_fill
+                            best_match = info['best_match']
+                            
+                            # Add detailed comment
+                            comment_text = f"Expected: ${expected_amount:,.2f}\n"
+                            comment_text += f"Best match found: ${best_match['total']:.2f}\n"
+                            comment_text += f"Difference: ${best_match['difference']:.2f}\n"
+                            comment_text += f"Using {best_match['combo_size']} GC 1416 transaction(s)\n"
+                            comment_text += f"Bank rows: {', '.join(map(str, best_match['bank_rows'][:5]))}"
+                            if len(best_match['bank_rows']) > 5:
+                                comment_text += f"... and {len(best_match['bank_rows'])-5} more"
+                            
+                            cell.comment = Comment(comment_text, "Best Match (Not Exact)")
+                        else:
+                            # Red for no matches at all
+                            cell.fill = red_fill
+                            unmatched_cells_count += 1
+                            
+                            comment_text = f"Expected: ${expected_amount:,.2f}\n"
+                            comment_text += f"No GC 1416 transactions found\n"
+                            comment_text += info.get('reason', 'No matches in date range')
+                            
+                            cell.comment = Comment(comment_text, "Unmatched")
                     
                     elif unmatched_info and (date, deposit_type) in unmatched_info:
                         # Unmatched cell

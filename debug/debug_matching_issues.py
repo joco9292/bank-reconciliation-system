@@ -11,8 +11,8 @@ def debug_matching_issues():
     
     # Load data
     print("1. Loading data...")
-    bank_statement = preprocess_bank_statement('june 2025 bank statement.CSV')
-    card_summary, _ = preprocess_card_summary_dynamic('card summary june.xlsx')
+    bank_statement = preprocess_bank_statement('july 2025 bank statement.CSV')
+    card_summary, _ = preprocess_card_summary_dynamic('XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (4).xlsx')
     
     # Add bank row numbers and card types
     bank_statement['Bank_Row_Number'] = range(2, len(bank_statement) + 2)

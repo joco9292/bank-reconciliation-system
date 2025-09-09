@@ -6,8 +6,8 @@ mapping = {
 'VDEBIT':'Debit Visa',
 'TD DMC':'Debit Master',
 'TD IDP':'Other Cards',
-'GC 1416': 'Cash/Check'  # Combined category
-
+'GC 1416': 'Cash/Check',  # Combined category
+'GC 1672': 'Cash/Check'  # Combined category
 }
 
 

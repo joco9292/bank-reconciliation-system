@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'processors'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'matchers'))
 import argparse
 import pandas as pd
 from datetime import datetime
@@ -11,6 +15,8 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
     from preprocess_card_summary import preprocess_card_summary_dynamic, create_highlighted_card_summary_dynamic
     from matching_helpers import identify_card_type, TransactionMatcher, filter_by_amount_range
     from highlighting_functions import create_highlighted_bank_statement, extract_matched_info_from_results
+    # ADD THIS IMPORT
+    from exclusive_discrepancy import calculate_total_discrepancies_by_card_type_exclusive
     
     print("=== Credit Card Transaction Matching ===\n")
     
@@ -33,6 +39,23 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
     # Extract info and generate reports
     matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
     
+    # ADD THIS: Calculate discrepancies by card type
+    discrepancies_by_type, first_matched_date = calculate_total_discrepancies_by_card_type_exclusive(
+        results, bank_statement, matched_bank_rows
+    )
+    
+    # Print discrepancy summary (optional)
+    if verbose:
+        print("\n=== CARD TYPE DISCREPANCIES ===")
+        if first_matched_date:
+            print(f"(Calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards)")
+        for card_type, disc in sorted(discrepancies_by_type.items()):
+            if abs(disc) > 0.01:
+                if disc > 0:
+                    print(f"{card_type}: +${disc:,.2f} (bank has more)")
+                else:
+                    print(f"{card_type}: -${abs(disc):,.2f} (bank has less)")
+    
     # Create highlighted files
     create_highlighted_bank_statement(
         bank_statement_path=bank_statement_path,
@@ -41,16 +64,20 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
         differences_by_row=differences_by_row
     )
     
+    # MODIFY THIS CALL to include differences_by_card_type
     create_highlighted_card_summary_dynamic(
         card_summary_path=card_summary_path,
         matched_dates_and_types=matched_dates_and_types,
         output_path=f'{output_dir}/card_summary_highlighted.xlsx',
         differences_info=differences_by_date_type,
-        unmatched_info=unmatched_info
+        unmatched_info=unmatched_info,
+        differences_by_card_type=discrepancies_by_type  # ADD THIS PARAMETER
     )
     
     print(f"✓ Card matching complete. Files saved to {output_dir}/")
-    return results
+    
+    # MODIFY RETURN to include discrepancies for use in combined analysis
+    return results, discrepancies_by_type, first_matched_date
 
 def run_deposit_matching(deposit_slip_path: str, bank_statement_path: str, 
                         output_dir: str = '.', verbose: bool = False):
@@ -91,9 +118,10 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
     
     print("\n" + "-"*60)
     
-    # Run card matching
-    card_results = run_card_matching(card_summary_path, bank_statement_path, 
-                                    output_dir, verbose)
+    # Run card matching - NOW RECEIVES THREE VALUES
+    card_results, card_discrepancies, first_matched_date = run_card_matching(
+        card_summary_path, bank_statement_path, output_dir, verbose
+    )
     
     print("\n" + "-"*60)
     
@@ -109,8 +137,13 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
     # Extract matched rows from both processes
     card_matched_rows = set()
     for date, date_results in card_results.items():
-        for match_info in date_results['matches_by_card_type'].values():
-            card_matched_rows.update(match_info['bank_rows'])
+        # Skip metadata keys that start with underscore
+        if isinstance(date, str) and date.startswith('_'):
+            continue
+        # Check if the expected key exists
+        if 'matches_by_card_type' in date_results:
+            for match_info in date_results['matches_by_card_type'].values():
+                card_matched_rows.update(match_info['bank_rows'])
     
     deposit_matched_rows = deposit_results.get('_matched_bank_rows', set())
     
@@ -135,6 +168,29 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
     print(f"\nFinancial Coverage:")
     print(f"  Matched amount: ${matched_amount:,.2f} ({matched_amount/total_bank_amount*100:.1f}%)")
     print(f"  Unmatched amount: ${unmatched_amount:,.2f} ({unmatched_amount/total_bank_amount*100:.1f}%)")
+    
+    # NEW SECTION: Display card discrepancies
+    if card_discrepancies:
+        print("\n" + "-"*60)
+        print("CARD TYPE DISCREPANCIES")
+        print("-"*60)
+        if first_matched_date:
+            print(f"(Calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards)\n")
+        
+        total_card_discrepancy = 0
+        for card_type, disc in sorted(card_discrepancies.items()):
+            if abs(disc) > 0.01:  # Only show non-zero discrepancies
+                if disc > 0:
+                    print(f"  {card_type}: +${disc:,.2f} (bank has more than expected)")
+                else:
+                    print(f"  {card_type}: -${abs(disc):,.2f} (bank has less than expected)")
+                total_card_discrepancy += disc
+        
+        print(f"\n  Total net discrepancy: ${total_card_discrepancy:,.2f}")
+        if total_card_discrepancy > 0:
+            print("  (Positive = bank statement total exceeds card summary expectations)")
+        elif total_card_discrepancy < 0:
+            print("  (Negative = card summary expects more than bank statement shows)")
     
     # Create combined highlighted bank statement
     from openpyxl import load_workbook
@@ -182,6 +238,17 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
     print("\n" + "="*60)
     print("ALL PROCESSING COMPLETE")
     print("="*60)
+    
+    # Generate comprehensive summary report
+    print("\nGenerated files:")
+    print(f"  1. {output_dir}/bank_statement_cards_highlighted.xlsx")
+    print(f"  2. {output_dir}/card_summary_highlighted.xlsx (with discrepancy notes)")
+    print(f"  3. {output_dir}/deposit_slip_highlighted.xlsx")
+    print(f"  4. {output_dir}/bank_statement_combined_highlighted.xlsx")
+    
+    if first_matched_date:
+        print(f"\nNote: Card discrepancies calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards")
+        print("(Earlier bank transactions excluded as they belong to previous month)")
 
 def main():
     parser = argparse.ArgumentParser(description='Bank Reconciliation System')
@@ -222,9 +289,9 @@ if __name__ == "__main__":
         # No command line args - run test
         print("Running with test configuration...")
         run_combined_analysis(
-            card_summary_path='XYZ Storage Laird - CreditCardSummary - 07-01-2025 - 07-31-2025 (3).xlsx',
-            deposit_slip_path='XYZ Storage Laird - MonthlyDepositSlip - 07-01-2025 - 07-31-2025.xlsx',
-            bank_statement_path='july 2025 bank statement.CSV',
+            card_summary_path='data/XYZ Storage Laird - CreditCardSummary - 06-01-2025 - 06-30-2025.xlsx',
+            deposit_slip_path='data/XYZ Storage Laird - MonthlyDepositSlip - 06-01-2025 - 06-30-2025 (2).xlsx',
+            bank_statement_path='data/june 2025 bank statement.CSV',
             output_dir='.',
             verbose=True
         )

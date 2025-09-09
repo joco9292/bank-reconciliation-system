@@ -31,7 +31,7 @@ class DepositMatcher:
     
     def filter_by_deposit_type_and_date(self, transactions: pd.DataFrame, 
                                        deposit_types: List[str], date: datetime,
-                                       forward_days: int = 3) -> pd.DataFrame:
+                                       forward_days: int = 7) -> pd.DataFrame:
         """
         Filter transactions that could match the given deposit types and date range.
         """
@@ -145,151 +145,242 @@ class DepositMatcher:
         return {'matched': False, 'reason': 'Could not allocate GC 1416 transactions optimally'}
     
     def match_deposit_transactions(self, deposit_slip: pd.DataFrame, 
-                                  bank_statement: pd.DataFrame,
-                                  forward_days: int = 3,
-                                  verbose: bool = False) -> Dict:
+                                bank_statement: pd.DataFrame,
+                                forward_days: int = 14,
+                                verbose: bool = False) -> Dict:
         """
-        Match deposit slip entries with bank transactions.
-        Special handling for GC 1416 which can be Cash or Check.
+        Match deposit slip entries with bank transactions using global optimization.
+        First identifies all potential matches, then allocates optimally.
         """
         results = {}
         matched_bank_rows = set()
-        gc_1416_allocations = {}
         
         # Add bank row numbers if not present
         if 'Bank_Row_Number' not in bank_statement.columns:
             bank_statement['Bank_Row_Number'] = range(2, len(bank_statement) + 2)
         
-        for _, deposit_row in deposit_slip.iterrows():
+        # PHASE 1: Collect all potential matches for each deposit entry
+        all_potential_matches = []
+        
+        for idx, deposit_row in deposit_slip.iterrows():
             date = deposit_row['Date']
-            date_results = {
-                'date': date,
-                'matches_by_type': {},
-                'unmatched_by_type': {}
-            }
-            
-            # Get Cash and Check amounts
             cash_expected = deposit_row.get('Cash', 0)
             check_expected = deposit_row.get('Check', 0)
             
             if cash_expected == 0 and check_expected == 0:
                 continue
             
-            if verbose:
-                print(f"\nProcessing {date.strftime('%Y-%m-%d')}: Cash=${cash_expected:,.2f}, Check=${check_expected:,.2f}")
-            
-            # Find all Cash/Check (formerly GC 1416) transactions in the date range
+            # Find all GC 1416 transactions in date range
             date_end = date + timedelta(days=forward_days)
             
-            # Look for transactions with the mapped value
             gc_1416_trans = bank_statement[
-                ((bank_statement['Description'].str.upper() == 'CASH/CHECK') |  # Exact match
-                 (bank_statement['Description'].str.contains('Cash/Check', case=False, na=False))) &
+                ((bank_statement['Description'].str.upper() == 'CASH/CHECK') |
+                (bank_statement['Description'].str.contains('Cash/Check', case=False, na=False)) |
+                (bank_statement['Description'].str.contains('GC 1416', case=False, na=False))) &
                 (bank_statement['Date'] >= date) &
-                (bank_statement['Date'] <= date_end) &
-                (~bank_statement['Bank_Row_Number'].isin(matched_bank_rows))
+                (bank_statement['Date'] <= date_end)
             ].copy()
             
-            if len(gc_1416_trans) > 0:
-                # Try to allocate GC 1416 transactions optimally
-                allocation_result = self.allocate_gc_1416_optimally(
-                    gc_1416_trans, cash_expected, check_expected
+            if verbose:
+                print(f"\nScanning {date.strftime('%Y-%m-%d')}: Cash=${cash_expected:,.2f}, Check=${check_expected:,.2f}")
+                print(f"  Found {len(gc_1416_trans)} potential GC 1416 transactions")
+            
+            # Find best match for Cash if expected
+            if cash_expected > 0 and len(gc_1416_trans) > 0:
+                best_match = self.find_best_combination(
+                    gc_1416_trans, cash_expected, tolerance=0.01, max_ratio=2.0
                 )
+                if best_match['combo_size'] > 0:
+                    all_potential_matches.append({
+                        'date': date,
+                        'type': 'Cash',
+                        'expected': cash_expected,
+                        'match': best_match,
+                        'priority': best_match['difference']  # Lower difference = higher priority
+                    })
+            
+            # Find best match for Check if expected  
+            if check_expected > 0 and len(gc_1416_trans) > 0:
+                best_match = self.find_best_combination(
+                    gc_1416_trans, check_expected, tolerance=0.01, max_ratio=2.0
+                )
+                if best_match['combo_size'] > 0:
+                    all_potential_matches.append({
+                        'date': date,
+                        'type': 'Check',
+                        'expected': check_expected,
+                        'match': best_match,
+                        'priority': best_match['difference']
+                    })
+        
+        # PHASE 2: Sort by priority (exact matches first, then by smallest difference)
+        all_potential_matches.sort(key=lambda x: (not x['match']['exact'], x['priority']))
+        
+        if verbose:
+            print(f"\n=== PHASE 2: Allocating {len(all_potential_matches)} potential matches ===")
+        
+        # PHASE 3: Allocate matches, ensuring no transaction is used twice
+        for match_info in all_potential_matches:
+            date = match_info['date']
+            deposit_type = match_info['type']
+            best_match = match_info['match']
+            
+            # Check if any of these bank rows are already used
+            available_rows = [r for r in best_match['bank_rows'] if r not in matched_bank_rows]
+            
+            if len(available_rows) == len(best_match['bank_rows']):
+                # All rows available - we can use this match
+                if date not in results:
+                    results[date] = {
+                        'date': date,
+                        'matches_by_type': {},
+                        'unmatched_by_type': {},
+                        'best_matches': {}
+                    }
                 
-                if allocation_result['matched']:
-                    # Process Cash allocation
-                    if cash_expected > 0:
-                        cash_alloc = allocation_result['cash_allocation']
-                        date_results['matches_by_type']['Cash'] = {
-                            'expected': cash_expected,
-                            'match_type': allocation_result['match_type'],
-                            'transactions': cash_alloc['transactions'],
-                            'bank_rows': cash_alloc['bank_rows'],
-                            'actual_total': cash_alloc['total'],
-                            'difference': cash_alloc['difference']
-                        }
-                        matched_bank_rows.update(cash_alloc['bank_rows'])
-                        
-                        # Store allocation info for highlighting
-                        gc_1416_allocations[(date, 'Cash')] = {
-                            'amount': cash_alloc['total'],
-                            'bank_rows': cash_alloc['bank_rows']
-                        }
-                        
-                        if verbose:
-                            print(f"  ✓ Cash matched: ${cash_alloc['total']:,.2f} from {len(cash_alloc['bank_rows'])} GC 1416 transactions")
-                    
-                    # Process Check allocation
-                    if check_expected > 0:
-                        check_alloc = allocation_result['check_allocation']
-                        date_results['matches_by_type']['Check'] = {
-                            'expected': check_expected,
-                            'match_type': allocation_result['match_type'],
-                            'transactions': check_alloc['transactions'],
-                            'bank_rows': check_alloc['bank_rows'],
-                            'actual_total': check_alloc['total'],
-                            'difference': check_alloc['difference']
-                        }
-                        matched_bank_rows.update(check_alloc['bank_rows'])
-                        
-                        # Store allocation info for highlighting
-                        gc_1416_allocations[(date, 'Check')] = {
-                            'amount': check_alloc['total'],
-                            'bank_rows': check_alloc['bank_rows']
-                        }
-                        
-                        if verbose:
-                            print(f"  ✓ Check matched: ${check_alloc['total']:,.2f} from {len(check_alloc['bank_rows'])} GC 1416 transactions")
-                else:
-                    # Partial matching or unmatched
-                    gc_total = gc_1416_trans['Amount'].sum()
-                    
-                    if cash_expected > 0:
-                        date_results['unmatched_by_type']['Cash'] = {
-                            'expected': cash_expected,
-                            'gc_1416_found': gc_total,
-                            'gc_1416_transactions': len(gc_1416_trans),
-                            'reason': f"GC 1416 total (${gc_total:,.2f}) doesn't match Cash+Check expected"
-                        }
-                    
-                    if check_expected > 0:
-                        date_results['unmatched_by_type']['Check'] = {
-                            'expected': check_expected,
-                            'gc_1416_found': gc_total,
-                            'gc_1416_transactions': len(gc_1416_trans),
-                            'reason': f"GC 1416 total (${gc_total:,.2f}) doesn't match Cash+Check expected"
-                        }
+                if best_match['exact']:
+                    # Exact match
+                    results[date]['matches_by_type'][deposit_type] = {
+                        'expected': match_info['expected'],
+                        'match_type': 'exact' if best_match['combo_size'] == 1 else f'exact_combo_{best_match["combo_size"]}',
+                        'transactions': best_match['transactions'],
+                        'bank_rows': best_match['bank_rows'],
+                        'actual_total': best_match['total'],
+                        'difference': best_match['difference']
+                    }
+                    matched_bank_rows.update(best_match['bank_rows'])
                     
                     if verbose:
-                        print(f"  ✗ Unmatched: Found ${gc_total:,.2f} in GC 1416 but expected ${cash_expected + check_expected:,.2f} total")
+                        print(f"  ✓ {date.strftime('%Y-%m-%d')} {deposit_type}: Exact match ${best_match['total']:,.2f}")
+                else:
+                    # Approximate match - still claim it to prevent reuse
+                    results[date]['unmatched_by_type'][deposit_type] = {
+                        'expected': match_info['expected'],
+                        'reason': f'Best match: ${best_match["total"]:.2f} (diff: ${best_match["difference"]:.2f})',
+                        'best_match': best_match
+                    }
+                    results[date]['best_matches'][deposit_type] = best_match
+                    matched_bank_rows.update(best_match['bank_rows'])
+                    
+                    if verbose:
+                        print(f"  ⚠ {date.strftime('%Y-%m-%d')} {deposit_type}: Approx match ${best_match['total']:,.2f} (diff: ${best_match['difference']:.2f})")
             else:
-                # No GC 1416 transactions found
-                if cash_expected > 0:
-                    date_results['unmatched_by_type']['Cash'] = {
-                        'expected': cash_expected,
-                        'gc_1416_found': 0,
-                        'gc_1416_transactions': 0,
-                        'reason': 'No GC 1416 transactions found in date range'
-                    }
-                
-                if check_expected > 0:
-                    date_results['unmatched_by_type']['Check'] = {
-                        'expected': check_expected,
-                        'gc_1416_found': 0,
-                        'gc_1416_transactions': 0,
-                        'reason': 'No GC 1416 transactions found in date range'
-                    }
-                
+                # Some/all rows already used
                 if verbose:
-                    print(f"  ✗ No GC 1416 transactions found")
-            
-            results[date] = date_results
+                    print(f"  ✗ {date.strftime('%Y-%m-%d')} {deposit_type}: Match unavailable (rows already used)")
         
-        # Add allocation info to results
-        results['_gc_1416_allocations'] = gc_1416_allocations
+        # PHASE 4: Mark remaining unmatched entries
+        for _, deposit_row in deposit_slip.iterrows():
+            date = deposit_row['Date']
+            
+            if date not in results:
+                results[date] = {
+                    'date': date,
+                    'matches_by_type': {},
+                    'unmatched_by_type': {},
+                    'best_matches': {}
+                }
+            
+            for deposit_type in ['Cash', 'Check']:
+                expected = deposit_row.get(deposit_type, 0)
+                if expected > 0:
+                    if deposit_type not in results[date]['matches_by_type'] and \
+                    deposit_type not in results[date]['unmatched_by_type']:
+                        # No match found at all
+                        results[date]['unmatched_by_type'][deposit_type] = {
+                            'expected': expected,
+                            'reason': 'No matching GC 1416 transactions found',
+                            'best_match': None
+                        }
+        
+        # CRITICAL: Add metadata - This is what was missing!
         results['_matched_bank_rows'] = matched_bank_rows
+        results['_gc_1416_allocations'] = {}
+        
+        if verbose:
+            print(f"\nDEBUG: Returning {len(matched_bank_rows)} matched bank rows")
         
         return results
+    
+    def find_best_combination(self, transactions: pd.DataFrame, target: float, 
+                            tolerance: float = 0.01, max_ratio: float = 2.0) -> Dict:
+        """
+        Find the best combination of transactions that matches the target amount.
+        Returns the closest match even if not exact.
+        
+        Args:
+            transactions: DataFrame of available transactions
+            target: Target amount to match
+            tolerance: Tolerance for exact matching (default 0.01)
+            max_ratio: Maximum ratio between match and target (default 2.0)
+                    Rejects matches > 2x or < 0.5x the target
+        """
+        from itertools import combinations
+        
+        best_diff = float('inf')
+        best_combo = None
+        best_indices = None
+        
+        # Try all combinations from 1 to all transactions (max 10 for performance)
+        max_combo_size = min(len(transactions), 10)
+        
+        for r in range(1, max_combo_size + 1):
+            for combo_indices in combinations(transactions.index, r):
+                combo_sum = transactions.loc[list(combo_indices), 'Amount'].sum()
+                diff = abs(combo_sum - target)
+                
+                if diff < best_diff:
+                    best_diff = diff
+                    best_combo = list(combo_indices)
+                    
+                    # If exact match found, we can stop
+                    if diff <= tolerance:
+                        break
+            
+            # If exact match found, stop looking
+            if best_diff <= tolerance:
+                break
+        
+        # Build result
+        if best_combo:
+            selected_trans = transactions.loc[best_combo]
+            total = selected_trans['Amount'].sum()
+            
+            # Sanity check - reject if match is way off
+            if target > 0:
+                ratio = total / target
+                if ratio > max_ratio or ratio < (1/max_ratio):
+                    # This match is too far off - return no match instead
+                    return {
+                        'exact': False,
+                        'total': 0,
+                        'difference': target,
+                        'combo_size': 0,
+                        'transactions': [],
+                        'bank_rows': [],
+                        'dates': []
+                    }
+            
+            return {
+                'exact': best_diff <= tolerance,
+                'total': total,
+                'difference': best_diff,
+                'combo_size': len(best_combo),
+                'transactions': selected_trans.to_dict('records'),
+                'bank_rows': selected_trans['Bank_Row_Number'].tolist(),
+                'dates': selected_trans['Date'].tolist()
+            }
+        
+        # No combination found at all
+        return {
+            'exact': False,
+            'total': 0,
+            'difference': target,
+            'combo_size': 0,
+            'transactions': [],
+            'bank_rows': [],
+            'dates': []
+        }
     
     def generate_deposit_report(self, results: dict, output_path: str = 'deposit_matching_report.xlsx'):
         """
@@ -353,8 +444,8 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     """
     Complete deposit slip processing workflow.
     """
-    from preprocess_deposit_slip import preprocess_deposit_slip_dynamic, create_highlighted_deposit_slip
-    from preprocess_bank_statement import preprocess_bank_statement
+    from processors.preprocess_deposit_slip import preprocess_deposit_slip_dynamic, create_highlighted_deposit_slip
+    from processors.preprocess_bank_statement import preprocess_bank_statement
     
     print("=== Deposit Slip Matching System ===\n")
     
@@ -370,7 +461,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     print("\nStep 2: Running deposit matching...")
     matcher = DepositMatcher()
     results = matcher.match_deposit_transactions(deposit_slip, bank_statement, 
-                                                forward_days=3, verbose=verbose)
+                                                forward_days=14, verbose=verbose)
     
     # Extract info for highlighting
     gc_1416_allocations = results.get('_gc_1416_allocations', {})
