@@ -170,7 +170,7 @@ def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_date
                         # Add comment
                         info = unmatched_info[(date, card_type)]
                         comment_text = f"Expected: ${expected_amount:,.2f}\n"
-                        comment_text += f"Found in UNMATCHED transactions: ${info.get('total_found', 0):,.2f}\n"
+                        comment_text += f"Found: ${info.get('total_found', 0):,.2f}\n"
                         comment_text += f"Difference: ${info.get('total_found', 0) - expected_amount:,.2f}\n"
                         comment_text += f"Unmatched transactions available: {info.get('found_transactions', 0)}\n"
                         comment_text += "\nNote: 'Found' amount excludes transactions already matched elsewhere"

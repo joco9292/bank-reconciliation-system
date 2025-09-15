@@ -281,8 +281,8 @@ if __name__ == "__main__":
     USE_MULTIPLE_BANKS = False  # Change to True when using multiple bank statements
     
     # File paths for single bank processing
-    SINGLE_BANK_STATEMENT_PATH = 'data/june 2025 bank statement.CSV'
-    CARD_SUMMARY_PATH = 'data/XYZ Storage Laird - CreditCardSummary - 06-01-2025 - 06-30-2025.xlsx'
+    SINGLE_BANK_STATEMENT_PATH = 'data/lakeshore.csv'
+    CARD_SUMMARY_PATH = 'data/XYZ Storage Lake Shore - CreditCardSummary - 08-01-2025 - 08-31-2025 (1).xlsx'
     
     # File paths for multi-bank processing
     MAIN_BANK_STATEMENT_PATH = 'data/july 2025 bank statement.CSV'

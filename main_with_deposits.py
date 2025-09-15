@@ -289,9 +289,9 @@ if __name__ == "__main__":
         # No command line args - run test
         print("Running with test configuration...")
         run_combined_analysis(
-            card_summary_path='data/XYZ Storage Laird - CreditCardSummary - 06-01-2025 - 06-30-2025.xlsx',
-            deposit_slip_path='data/XYZ Storage Laird - MonthlyDepositSlip - 06-01-2025 - 06-30-2025 (2).xlsx',
-            bank_statement_path='data/june 2025 bank statement.CSV',
+            card_summary_path='data/XYZ Storage Lake Shore - CreditCardSummary - 08-01-2025 - 08-31-2025 (1).xlsx',
+            deposit_slip_path='data/XYZ Storage Lake Shore - MonthlyDepositSlip - 08-01-2025 - 08-31-2025 (1).xlsx',
+            bank_statement_path='data/lakeshore.csv',
             output_dir='.',
             verbose=True
         )

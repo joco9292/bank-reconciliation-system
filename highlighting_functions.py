@@ -159,7 +159,7 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
                         
                         comment_lines = []
                         comment_lines.append(f"Expected: ${expected:,.2f}")
-                        comment_lines.append(f"Found in UNMATCHED transactions: ${total_found:,.2f}")
+                        comment_lines.append(f"Found transactions: ${total_found:,.2f}")
                         comment_lines.append(f"Difference: ${difference:,.2f}")
                         comment_lines.append(f"Unmatched transactions available: {found_count}")
                         if info.get('reason'):

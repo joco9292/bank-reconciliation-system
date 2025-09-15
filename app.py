@@ -1,6 +1,6 @@
 """
 Bank Reconciliation Streamlit Application
-Properly structured to work with your existing modules
+Enhanced with CSV text input support
 """
 
 import streamlit as st
@@ -51,6 +51,8 @@ class BankReconciliationApp:
             st.session_state.temp_dir = tempfile.mkdtemp(prefix="bank_recon_")
         if 'console_output' not in st.session_state:
             st.session_state.console_output = ""
+        if 'bank_input_method' not in st.session_state:
+            st.session_state.bank_input_method = 'file'
             
     def render_header(self):
         """Render the application header"""
@@ -61,12 +63,16 @@ class BankReconciliationApp:
         with st.expander("📖 How to Use", expanded=False):
             st.markdown("""
             1. **Select Processing Mode** in the sidebar (Cards, Deposits, or Both)
-            2. **Upload Required Files**:
-               - Bank Statement (CSV) - Always required
-               - Card Summary (Excel) - Required for Cards or Both modes
-               - Deposit Slip (Excel) - Required for Deposits or Both modes
+            2. **Provide Required Data**:
+               - **Bank Statement**: Choose between file upload or paste CSV text
+               - **Card Summary** (Excel) - Required for Cards or Both modes
+               - **Deposit Slip** (Excel) - Required for Deposits or Both modes
             3. **Click Process** to run the reconciliation
             4. **Download Results** after processing completes
+            
+            **Bank Statement Input Options:**
+            - **File Upload**: Upload a CSV file directly
+            - **Text Input**: Copy and paste CSV text from your bank statement
             """)
             
     def render_sidebar(self):
@@ -111,17 +117,46 @@ class BankReconciliationApp:
                     
             return forward_days, verbose
     
+    def validate_csv_text(self, csv_text):
+        """Validate CSV text input"""
+        try:
+            # Try to parse the CSV text
+            df = pd.read_csv(StringIO(csv_text))
+            
+            # Check if it has required columns (adjust based on your requirements)
+            required_cols = ['Date', 'Description']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                return False, f"Missing required columns: {', '.join(missing_cols)}", None
+            
+            # Check if there's actual data
+            if len(df) == 0:
+                return False, "CSV contains no data rows", None
+                
+            return True, "Valid CSV format", df
+            
+        except Exception as e:
+            return False, f"Invalid CSV format: {str(e)}", None
+    
     def render_file_upload(self):
-        """Render the file upload interface"""
-        st.header("📁 File Upload")
+        """Render the file upload interface with text input option"""
+        st.header("📁 Data Input")
         
         # Determine which files are required based on mode
         mode = st.session_state.processing_mode
         
-        col1, col2, col3 = st.columns(3)
+        # Bank Statement Section with tabs for input method
+        st.subheader("Bank Statement *")
         
-        with col1:
-            st.subheader("Bank Statement *")
+        # Input method selection
+        bank_input_tabs = st.tabs(["📄 File Upload", "📝 Text Input"])
+        
+        bank_file = None
+        bank_csv_text = None
+        bank_df = None
+        
+        with bank_input_tabs[0]:
             bank_file = st.file_uploader(
                 "Upload Bank Statement CSV",
                 type=['csv'],
@@ -136,9 +171,55 @@ class BankReconciliationApp:
                     with st.expander("Preview (first 5 rows)"):
                         st.dataframe(df.head(), use_container_width=True)
                     bank_file.seek(0)  # Reset file pointer
+                    st.session_state.bank_input_method = 'file'
                 except Exception as e:
                     st.error(f"Error reading file: {e}")
+        
+        with bank_input_tabs[1]:
+            st.markdown("**Paste your bank statement CSV text below:**")
+            bank_csv_text = st.text_area(
+                "CSV Text Input",
+                height=300,
+                placeholder="Account Number,Currency,Date,Description,Debit Amount,Credit Amount\n015760404641,CAD,2025/08/01,GC 1509-DEPOSIT,,766.14\n...",
+                key='bank_csv_input',
+                help="Copy and paste your bank statement data in CSV format"
+            )
+            
+            if bank_csv_text and bank_csv_text.strip():
+                # Validate CSV text
+                is_valid, message, df = self.validate_csv_text(bank_csv_text)
                 
+                if is_valid:
+                    st.success(f"✅ {message}")
+                    bank_df = df
+                    st.session_state.bank_input_method = 'text'
+                    
+                    # Show preview
+                    with st.expander("Preview (first 5 rows)"):
+                        st.dataframe(df.head(), use_container_width=True)
+                    
+                    # Show data statistics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Rows", len(df))
+                    with col2:
+                        st.metric("Columns", len(df.columns))
+                    with col3:
+                        if 'Date' in df.columns:
+                            try:
+                                dates = pd.to_datetime(df['Date'], errors='coerce')
+                                date_range = f"{dates.min().strftime('%Y-%m-%d')} to {dates.max().strftime('%Y-%m-%d')}"
+                                st.metric("Date Range", date_range)
+                            except:
+                                pass
+                else:
+                    st.error(f"❌ {message}")
+        
+        st.markdown("---")
+        
+        # Other file uploads (Card Summary and Deposit Slip)
+        col2, col3 = st.columns(2)
+        
         with col2:
             required_for_cards = mode in ['cards', 'both']
             st.subheader(f"Card Summary {'*' if required_for_cards else ''}")
@@ -182,19 +263,29 @@ class BankReconciliationApp:
                     st.error(f"Error reading file: {e}")
         
         st.caption("* Required for selected mode")
-        return bank_file, card_file, deposit_file
+        return bank_file, bank_csv_text, bank_df, card_file, deposit_file
     
-    def save_uploaded_files(self, bank_file, card_file, deposit_file):
-        """Save uploaded files to temporary directory"""
+    def save_uploaded_files(self, bank_file, bank_csv_text, bank_df, card_file, deposit_file):
+        """Save uploaded files and text input to temporary directory"""
         file_paths = {}
         
         try:
+            # Handle bank statement - either file or text
             if bank_file:
+                # Save uploaded file
                 bank_path = os.path.join(st.session_state.temp_dir, bank_file.name)
                 with open(bank_path, 'wb') as f:
                     f.write(bank_file.getbuffer())
                 file_paths['bank'] = bank_path
                 
+            elif bank_csv_text and bank_df is not None:
+                # Save text input as CSV file
+                bank_path = os.path.join(st.session_state.temp_dir, "bank_statement_input.csv")
+                bank_df.to_csv(bank_path, index=False)
+                file_paths['bank'] = bank_path
+                st.info(f"💾 Bank statement text saved as: bank_statement_input.csv")
+                
+            # Handle other files
             if card_file:
                 card_path = os.path.join(st.session_state.temp_dir, card_file.name)
                 with open(card_path, 'wb') as f:
@@ -313,7 +404,9 @@ class BankReconciliationApp:
         
         # Also look for any CSV files that might have been generated
         for file_path in temp_dir.glob("*.csv"):
-            generated_files[file_path.name] = str(file_path)
+            # Don't include the input bank statement file if it was from text
+            if file_path.name != "bank_statement_input.csv":
+                generated_files[file_path.name] = str(file_path)
                 
         st.session_state.generated_files = generated_files
     
@@ -345,36 +438,98 @@ class BankReconciliationApp:
         st.subheader("📥 Download Generated Files")
         
         if st.session_state.generated_files:
-            # Create columns for download buttons
-            num_files = len(st.session_state.generated_files)
-            num_cols = min(3, num_files)
+            # Define primary files to showcase
+            primary_files = [
+                'card_summary_highlighted.xlsx',
+                'bank_statement_combined_highlighted.xlsx',
+                'deposit_slip_highlighted.xlsx'
+            ]
             
-            if num_files > 0:
-                cols = st.columns(num_cols)
-                for idx, (filename, filepath) in enumerate(st.session_state.generated_files.items()):
-                    col_idx = idx % num_cols
-                    with cols[col_idx]:
-                        try:
-                            with open(filepath, 'rb') as f:
-                                file_data = f.read()
-                            
-                            # Determine MIME type
-                            if filename.endswith('.xlsx'):
-                                mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            elif filename.endswith('.csv'):
-                                mime = "text/csv"
-                            else:
-                                mime = "application/octet-stream"
-                            
-                            st.download_button(
-                                label=f"📄 {filename}",
-                                data=file_data,
-                                file_name=filename,
-                                mime=mime,
-                                key=f"download_{filename}"
-                            )
-                        except Exception as e:
-                            st.error(f"Error reading {filename}: {str(e)}")
+            # Separate files into primary and additional
+            primary_downloads = {}
+            additional_downloads = {}
+            
+            for filename, filepath in st.session_state.generated_files.items():
+                if filename in primary_files:
+                    primary_downloads[filename] = filepath
+                else:
+                    additional_downloads[filename] = filepath
+            
+            # Display primary files prominently
+            if primary_downloads:
+                st.markdown("**📌 Primary Reports**")
+                cols = st.columns(3)
+                
+                # Ensure consistent ordering
+                for idx, primary_file in enumerate(primary_files):
+                    if primary_file in primary_downloads:
+                        with cols[idx % 3]:
+                            filepath = primary_downloads[primary_file]
+                            try:
+                                with open(filepath, 'rb') as f:
+                                    file_data = f.read()
+                                
+                                # Create a more descriptive label
+                                if 'card_summary' in primary_file:
+                                    label = "💳 Card Summary Report"
+                                elif 'bank_statement_combined' in primary_file:
+                                    label = "🏦 Combined Bank Statement"
+                                elif 'deposit_slip' in primary_file:
+                                    label = "💵 Deposit Slip Report"
+                                else:
+                                    label = f"📄 {primary_file}"
+                                
+                                st.download_button(
+                                    label=label,
+                                    data=file_data,
+                                    file_name=primary_file,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"download_primary_{primary_file}",
+                                    type="primary"  # Make primary files stand out
+                                )
+                            except Exception as e:
+                                st.error(f"Error reading {primary_file}: {str(e)}")
+            
+            # Display additional files under expander
+            if additional_downloads:
+                st.markdown("---")
+                with st.expander(f"📂 Additional Files ({len(additional_downloads)} files)", expanded=False):
+                    # Calculate columns needed
+                    num_files = len(additional_downloads)
+                    num_cols = min(3, num_files)
+                    
+                    if num_files > 0:
+                        cols = st.columns(num_cols)
+                        for idx, (filename, filepath) in enumerate(additional_downloads.items()):
+                            col_idx = idx % num_cols
+                            with cols[col_idx]:
+                                try:
+                                    with open(filepath, 'rb') as f:
+                                        file_data = f.read()
+                                    
+                                    # Determine MIME type
+                                    if filename.endswith('.xlsx'):
+                                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    elif filename.endswith('.csv'):
+                                        mime = "text/csv"
+                                    else:
+                                        mime = "application/octet-stream"
+                                    
+                                    # Shorten label if needed
+                                    if len(filename) > 30:
+                                        display_name = filename[:27] + "..."
+                                    else:
+                                        display_name = filename
+                                    
+                                    st.download_button(
+                                        label=f"📄 {display_name}",
+                                        data=file_data,
+                                        file_name=filename,
+                                        mime=mime,
+                                        key=f"download_additional_{filename}"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error reading {filename}: {str(e)}")
         else:
             st.warning("No files were generated. Please check the processing logs.")
     
@@ -385,37 +540,40 @@ class BankReconciliationApp:
         # Sidebar configuration
         forward_days, verbose = self.render_sidebar()
         
-        # File upload section
-        bank_file, card_file, deposit_file = self.render_file_upload()
+        # File upload section with text input option
+        bank_file, bank_csv_text, bank_df, card_file, deposit_file = self.render_file_upload()
         
         # Validate file requirements based on mode
         mode = st.session_state.processing_mode
         can_process = False
         missing_files = []
         
+        # Check if we have bank statement (either file or text)
+        has_bank = bank_file or (bank_csv_text and bank_df is not None)
+        
         if mode == 'cards':
-            if bank_file and card_file:
+            if has_bank and card_file:
                 can_process = True
             else:
-                if not bank_file:
+                if not has_bank:
                     missing_files.append("Bank Statement")
                 if not card_file:
                     missing_files.append("Card Summary")
                     
         elif mode == 'deposits':
-            if bank_file and deposit_file:
+            if has_bank and deposit_file:
                 can_process = True
             else:
-                if not bank_file:
+                if not has_bank:
                     missing_files.append("Bank Statement")
                 if not deposit_file:
                     missing_files.append("Deposit Slip")
                     
         else:  # both
-            if bank_file and card_file and deposit_file:
+            if has_bank and card_file and deposit_file:
                 can_process = True
             else:
-                if not bank_file:
+                if not has_bank:
                     missing_files.append("Bank Statement")
                 if not card_file:
                     missing_files.append("Card Summary")
@@ -423,7 +581,7 @@ class BankReconciliationApp:
                     missing_files.append("Deposit Slip")
         
         # Show missing files warning
-        if missing_files and (bank_file or card_file or deposit_file):
+        if missing_files and (has_bank or card_file or deposit_file):
             st.warning(f"⚠️ Missing required files: {', '.join(missing_files)}")
         
         # Process button
@@ -435,7 +593,7 @@ class BankReconciliationApp:
                 type="primary",
                 use_container_width=True,
                 disabled=not can_process,
-                help="Process the uploaded files" if can_process else f"Please upload: {', '.join(missing_files)}"
+                help="Process the uploaded files" if can_process else f"Please provide: {', '.join(missing_files)}"
             ):
                 # Reset previous results
                 st.session_state.processing_complete = False
@@ -444,8 +602,10 @@ class BankReconciliationApp:
                 st.session_state.console_output = ""
                 
                 # Save files and process
-                with st.spinner("Saving uploaded files..."):
-                    file_paths = self.save_uploaded_files(bank_file, card_file, deposit_file)
+                with st.spinner("Saving input data..."):
+                    file_paths = self.save_uploaded_files(
+                        bank_file, bank_csv_text, bank_df, card_file, deposit_file
+                    )
                 
                 if file_paths:
                     success = self.process_files(file_paths, forward_days, verbose)
@@ -454,7 +614,7 @@ class BankReconciliationApp:
                         st.success("✅ Processing completed successfully!")
                         st.balloons()
                 else:
-                    st.error("Failed to save uploaded files")
+                    st.error("Failed to save input data")
         
         # Display results
         if st.session_state.processing_complete:
@@ -465,7 +625,7 @@ class BankReconciliationApp:
         with st.container():
             col1, col2, col3 = st.columns(3)
             with col2:
-                st.caption("Bank Reconciliation System v1.0")
+                st.caption("Bank Reconciliation System v1.1")
 
 # Run the app
 if __name__ == "__main__":
