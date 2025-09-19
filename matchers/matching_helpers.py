@@ -40,12 +40,17 @@ def filter_by_card_type_and_date(transactions: pd.DataFrame, card_type: str,
                                 date: datetime, forward_days: int = 3) -> pd.DataFrame:
     """
     Filter 1: Get transactions matching card type within date range.
+    Only considers CREDIT and BPAD transactions for credit card matching.
     """
     date_end = date + timedelta(days=forward_days)
+    
+    # Only consider transactions that are CREDIT or BPAD (money going out)
+    # DEBIT transactions (money coming in) should not be matched against credit card summaries
     return transactions[
         (transactions['Card_Type'] == card_type) &
         (transactions['Date'] >= date) &
-        (transactions['Date'] <= date_end)
+        (transactions['Date'] <= date_end) &
+        (transactions['Transaction_Type'].isin(['CREDIT', 'BPAD']))
     ].copy()
 
 def filter_exact_match(transactions: pd.DataFrame, expected_amount: float, 
@@ -244,6 +249,9 @@ class TransactionMatcher:
         # NEW: Track which bank rows are allocated to which cell for discrepancy calculations
         allocated_for_discrepancy = {}  # {bank_row: (date, card_type)}
         
+        # NEW: Track attempted but failed bank rows
+        attempted_bank_rows = set()  # All rows that were candidates for matching
+        
         # Card types to process
         card_types = [col for col in card_summary.columns 
                       if col not in ['Date', 'Total', 'Visa & MC'] and not col.startswith('Unnamed')]
@@ -267,6 +275,11 @@ class TransactionMatcher:
                 filtered_transactions = filter_by_card_type_and_date(
                     bank_statement, card_type, date, forward_days
                 )
+                
+                # Track all candidate bank rows as "attempted"
+                if len(filtered_transactions) > 0:
+                    candidate_rows = set(filtered_transactions['Bank_Row_Number'].tolist())
+                    attempted_bank_rows.update(candidate_rows)
                 
                 if len(filtered_transactions) == 0:
                     date_results['unmatched_by_card_type'][card_type] = {
@@ -385,5 +398,6 @@ class TransactionMatcher:
         
         # Add allocation info to results for reporting
         results['_allocated_for_discrepancy'] = allocated_for_discrepancy
+        results['_attempted_bank_rows'] = attempted_bank_rows
         
         return results

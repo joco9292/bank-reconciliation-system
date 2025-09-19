@@ -56,6 +56,106 @@ def create_highlighted_bank_statement(bank_statement_path: str, matched_bank_row
     print(f"  - Total rows: {len(original_df)}")
     print(f"  - Matched rows: {len(matched_bank_rows)}")
 
+def create_combined_highlighted_bank_statement(bank_statement_path: str, 
+                                             card_matched_rows: set = None,
+                                             deposit_matched_rows: set = None,
+                                             card_attempted_rows: set = None,
+                                             deposit_attempted_rows: set = None,
+                                             output_path: str = 'bank_statement_combined_highlighted.xlsx'):
+    """
+    Create a combined highlighted copy of the original bank statement showing results from both 
+    credit card and deposit matching.
+    
+    Args:
+        bank_statement_path (str): Path to original bank statement CSV
+        card_matched_rows (set): Set of row numbers matched by card matching (1-based Excel rows)
+        deposit_matched_rows (set): Set of row numbers matched by deposit matching (1-based Excel rows)
+        card_attempted_rows (set): Set of row numbers attempted by card matching (1-based Excel rows)
+        deposit_attempted_rows (set): Set of row numbers attempted by deposit matching (1-based Excel rows)
+        output_path (str): Output path for highlighted Excel file
+    """
+    # Initialize sets if None
+    card_matched_rows = card_matched_rows or set()
+    deposit_matched_rows = deposit_matched_rows or set()
+    card_attempted_rows = card_attempted_rows or set()
+    deposit_attempted_rows = deposit_attempted_rows or set()
+    
+    # Read the original CSV file
+    original_df = pd.read_csv(bank_statement_path)
+    
+    # Calculate combined sets
+    all_matched_rows = card_matched_rows | deposit_matched_rows
+    all_attempted_rows = card_attempted_rows | deposit_attempted_rows
+    overlap_matched = card_matched_rows & deposit_matched_rows
+    failed_attempts = all_attempted_rows - all_matched_rows
+    
+    # Write to Excel with highlighting
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        original_df.to_excel(writer, sheet_name='Bank Statement', index=False)
+        
+        # Get the workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Bank Statement']
+        
+        # Define highlight colors
+        green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')    # Card matches
+        blue_fill = PatternFill(start_color='87CEEB', end_color='87CEEB', fill_type='solid')     # Deposit matches
+        purple_fill = PatternFill(start_color='DDA0DD', end_color='DDA0DD', fill_type='solid')   # Both matched
+        red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')     # Attempted but failed
+        
+        # Apply highlighting
+        for row_idx in range(len(original_df)):
+            excel_row = row_idx + 2  # +2 because Excel is 1-based and has header
+            bank_row = excel_row  # bank_row is same as excel_row for highlighting
+            
+            # Determine highlight color based on priority: overlap > individual matches > failed attempts
+            fill_color = None
+            if bank_row in overlap_matched:
+                # Purple for rows matched by both systems
+                fill_color = purple_fill
+            elif bank_row in card_matched_rows:
+                # Green for card matches only
+                fill_color = green_fill
+            elif bank_row in deposit_matched_rows:
+                # Blue for deposit matches only
+                fill_color = blue_fill
+            elif bank_row in failed_attempts:
+                # Red for attempted but failed
+                fill_color = red_fill
+            
+            # Apply the color if determined
+            if fill_color:
+                for col in range(1, len(original_df.columns) + 1):
+                    cell = worksheet.cell(row=excel_row, column=col)
+                    cell.fill = fill_color
+        
+        # Auto-adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+    
+    print(f"✓ Created combined highlighted bank statement: {output_path}")
+    print("  Color legend:")
+    print("    Green = Matched by credit card matching only")
+    print("    Blue = Matched by deposit matching only") 
+    print("    Purple = Matched by both credit card and deposit matching")
+    print("    Red = Attempted but failed to match")
+    print("    No color = Not processed for matching")
+    print(f"  - Total rows: {len(original_df)}")
+    print(f"  - Card matched: {len(card_matched_rows)}")
+    print(f"  - Deposit matched: {len(deposit_matched_rows)}")
+    print(f"  - Overlap (both): {len(overlap_matched)}")
+    print(f"  - Total unique matched: {len(all_matched_rows)}")
+    print(f"  - Failed match attempts: {len(failed_attempts)}")
+
 def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_types: dict,
                                   output_path: str = 'card_summary_highlighted.xlsx',
                                   skiprows=[0, 1, 3, 34], differences_info: dict = None,

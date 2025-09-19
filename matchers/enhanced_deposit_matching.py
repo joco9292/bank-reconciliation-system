@@ -146,9 +146,11 @@ class EnhancedDepositMatcher:
         }
         
         # Get all transactions in date range
+        # Only consider CREDIT transactions (money coming in) for deposit matching
         date_transactions = bank_statement[
             (bank_statement['Date'] >= date) &
-            (bank_statement['Date'] <= date_end)
+            (bank_statement['Date'] <= date_end) &
+            (bank_statement['Transaction_Type'] == 'CREDIT')
         ].copy()
         
         if date_transactions.empty:
@@ -391,6 +393,10 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
     # Generate reports and highlighted files
     print("\n=== Generating Reports ===")
     
+    # Calculate discrepancies by deposit type
+    from deposit_matching import calculate_deposit_discrepancies_by_type
+    deposit_discrepancies = calculate_deposit_discrepancies_by_type(all_results, deposit_slip)
+    
     # Create highlighted deposit slip
     from preprocess_deposit_slip import create_highlighted_deposit_slip
     create_highlighted_deposit_slip(
@@ -398,7 +404,8 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
         matched_dates_and_types=matched_dates_and_types,
         output_path=f'{output_dir}/deposit_slip_enhanced_highlighted.xlsx',
         unmatched_info=unmatched_info,
-        gc_1416_allocation=gc_1416_allocations
+        gc_1416_allocation=gc_1416_allocations,
+        deposit_discrepancies=deposit_discrepancies
     )
     
     # Create highlighted bank statement

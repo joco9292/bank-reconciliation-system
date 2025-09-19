@@ -7,8 +7,8 @@ mapping = {
 'TD DMC':'Debit Master',
 'TD IDP':'Other Cards',
 'GC': 'Cash/Check',  # Combined category
-'GC': 'Cash/Check'  # Combined category
+'TD DS':'Discover',
+'TD AXP':'Amex',
 }
-
 
 

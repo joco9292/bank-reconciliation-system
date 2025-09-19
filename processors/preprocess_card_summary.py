@@ -103,8 +103,9 @@ def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_date
     """
     import shutil
     from openpyxl import load_workbook
-    from openpyxl.styles import PatternFill
+    from openpyxl.styles import PatternFill, Font
     from openpyxl.comments import Comment
+    import openpyxl.styles
     
     # Get the structure info
     card_summary_df, structure_info = preprocess_card_summary_dynamic(card_summary_path)
@@ -197,6 +198,36 @@ def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_date
                         comment_text += "\nPossible causes: missing transactions,\nunprocessed charges, or timing differences"
                     
                     cell.comment = Comment(comment_text, "Difference Summary")
+    
+    # ADD NEW DISCREPANCY ROW below the total row
+    if structure_info['total_row'] is not None and differences_by_card_type:
+        discrepancy_row = structure_info['total_row'] + 2  # +2 to be below total row
+        
+        # Add label in first column
+        label_cell = worksheet.cell(row=discrepancy_row, column=1)
+        label_cell.value = "Net Discrepancy"
+        label_cell.font = Font(bold=True)
+        
+        # Add discrepancy values for each card type
+        for card_type, col_idx in column_mapping.items():
+            if card_type in differences_by_card_type and card_type not in ['Date', 'Total', 'Visa & MC']:
+                diff = differences_by_card_type[card_type]
+                cell = worksheet.cell(row=discrepancy_row, column=col_idx)
+                
+                # Format positive/negative with appropriate colors
+                if abs(diff) > 0.01:
+                    cell.value = diff
+                    cell.number_format = '$#,##0.00'
+                    
+                    # Color code: red for negative (bank has less), blue for positive (bank has more)
+                    if diff > 0:
+                        cell.font = Font(color='0000FF', bold=True)  # Blue for positive
+                    else:
+                        cell.font = Font(color='FF0000', bold=True)  # Red for negative
+                else:
+                    cell.value = 0
+                    cell.number_format = '$#,##0.00'
+                    cell.font = Font(color='008000', bold=True)  # Green for zero
     
     # Save
     workbook.save(output_path)

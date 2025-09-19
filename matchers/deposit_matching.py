@@ -155,6 +155,9 @@ class DepositMatcher:
         results = {}
         matched_bank_rows = set()
         
+        # NEW: Track attempted but failed bank rows
+        attempted_bank_rows = set()  # All rows that were candidates for matching
+        
         # Add bank row numbers if not present
         if 'Bank_Row_Number' not in bank_statement.columns:
             bank_statement['Bank_Row_Number'] = range(2, len(bank_statement) + 2)
@@ -171,6 +174,7 @@ class DepositMatcher:
                 continue
             
             # Find all GC 1416 transactions in date range
+            # Only consider CREDIT transactions (money coming in) for deposit matching
             date_end = date + timedelta(days=forward_days)
             
             gc_1416_trans = bank_statement[
@@ -178,8 +182,14 @@ class DepositMatcher:
                 (bank_statement['Description'].str.contains('Cash/Check', case=False, na=False)) |
                 (bank_statement['Description'].str.contains('GC 1416', case=False, na=False))) &
                 (bank_statement['Date'] >= date) &
-                (bank_statement['Date'] <= date_end)
+                (bank_statement['Date'] <= date_end) &
+                (bank_statement['Transaction_Type'] == 'CREDIT')
             ].copy()
+            
+            # Track all candidate bank rows as "attempted"
+            if len(gc_1416_trans) > 0:
+                candidate_rows = set(gc_1416_trans['Bank_Row_Number'].tolist())
+                attempted_bank_rows.update(candidate_rows)
             
             if verbose:
                 print(f"\nScanning {date.strftime('%Y-%m-%d')}: Cash=${cash_expected:,.2f}, Check=${check_expected:,.2f}")
@@ -295,6 +305,7 @@ class DepositMatcher:
         
         # CRITICAL: Add metadata - This is what was missing!
         results['_matched_bank_rows'] = matched_bank_rows
+        results['_attempted_bank_rows'] = attempted_bank_rows
         results['_gc_1416_allocations'] = {}
         
         if verbose:
@@ -389,9 +400,10 @@ class DepositMatcher:
         summary_data = []
         allocation_details = []
         
-        # Extract GC 1416 allocations if present
+        # Extract metadata
         gc_1416_allocations = results.pop('_gc_1416_allocations', {})
         matched_bank_rows = results.pop('_matched_bank_rows', set())
+        attempted_bank_rows = results.pop('_attempted_bank_rows', set())
         
         for date, date_results in results.items():
             # Process matches
@@ -472,7 +484,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     unmatched_info = {}
     
     for date, date_results in results.items():
-        if date == '_gc_1416_allocations' or date == '_matched_bank_rows':
+        if date in ['_gc_1416_allocations', '_matched_bank_rows', '_attempted_bank_rows']:
             continue
         
         matched_types = []
@@ -482,9 +494,12 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
         if matched_types:
             matched_dates_and_types[date] = matched_types
         
-        for deposit_type, unmatch_info in date_results['unmatched_by_type'].items():
+        for deposit_type, unmatch_info in date_results.get('unmatched_by_type', {}).items():
             unmatched_info[(date, deposit_type)] = unmatch_info
-    
+
+    # Calculate discrepancies by deposit type
+    deposit_discrepancies = calculate_deposit_discrepancies_by_type(results, deposit_slip)
+
     # Generate report
     print("\nStep 3: Generating reports...")
     report_path = f"{output_dir}/deposit_matching_report.xlsx"
@@ -497,7 +512,8 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
         matched_dates_and_types=matched_dates_and_types,
         output_path=highlighted_path,
         unmatched_info=unmatched_info,
-        gc_1416_allocation=gc_1416_allocations
+        gc_1416_allocation=gc_1416_allocations,
+        deposit_discrepancies=deposit_discrepancies
     )
     
     # Create highlighted bank statement
@@ -515,7 +531,50 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     print(f"  2. {highlighted_path}")
     print(f"  3. {bank_highlighted_path}")
     
+    # Add metadata to results for combined analysis
+    results['_matched_bank_rows'] = matched_bank_rows
+    results['_attempted_bank_rows'] = results.get('_attempted_bank_rows', set())
+    
     return results
+
+def calculate_deposit_discrepancies_by_type(results: Dict, deposit_slip: pd.DataFrame) -> Dict:
+    """
+    Calculate total discrepancies by deposit type (Cash/Check).
+    
+    Returns:
+        Dict with deposit types as keys and total discrepancy amounts as values
+    """
+    discrepancies = {'Cash': 0.0, 'Check': 0.0}
+    
+    for date, date_results in results.items():
+        if isinstance(date, str) and date.startswith('_'):  # Skip metadata
+            continue
+        
+        # Get the date's row in deposit slip to get expected amounts
+        date_row = deposit_slip[deposit_slip['Date'] == date]
+        if date_row.empty:
+            continue
+        
+        date_row = date_row.iloc[0]
+        
+        for deposit_type in ['Cash', 'Check']:
+            expected = date_row.get(deposit_type, 0)
+            if expected == 0:
+                continue
+            
+            # Check if this date/type was matched
+            if deposit_type in date_results.get('matches_by_type', {}):
+                match_info = date_results['matches_by_type'][deposit_type]
+                actual_total = match_info.get('actual_total', expected)
+                difference = match_info.get('difference', 0)
+                
+                # Add to total discrepancy for this deposit type
+                discrepancies[deposit_type] += difference
+            else:
+                # Unmatched = bank has 0, expected > 0, so discrepancy is -expected
+                discrepancies[deposit_type] -= expected
+    
+    return discrepancies
 
 if __name__ == "__main__":
     # Test the deposit matcher

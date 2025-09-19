@@ -96,7 +96,8 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                                   matched_dates_and_types: dict,
                                   output_path: str = 'deposit_slip_highlighted.xlsx',
                                   unmatched_info: dict = None,
-                                  gc_1416_allocation: dict = None):
+                                  gc_1416_allocation: dict = None,
+                                  deposit_discrepancies: dict = None):
     """
     Create highlighted deposit slip with special handling for GC 1416 allocations.
     
@@ -227,6 +228,37 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                         
                         cell.comment = Comment(comment_text, "Matching System")
     
+    # ADD NEW DISCREPANCY ROW below the total row
+    if structure_info['total_row'] is not None and deposit_discrepancies:
+        from openpyxl.styles import Font
+        discrepancy_row = structure_info['total_row'] + 2  # +2 to be below total row
+        
+        # Add label in first column
+        label_cell = worksheet.cell(row=discrepancy_row, column=1)
+        label_cell.value = "Net Discrepancy"
+        label_cell.font = Font(bold=True)
+        
+        # Add discrepancy values for each deposit type
+        for deposit_type, col_idx in column_mapping.items():
+            if deposit_type in deposit_discrepancies and deposit_type in ['Cash', 'Check']:
+                diff = deposit_discrepancies[deposit_type]
+                cell = worksheet.cell(row=discrepancy_row, column=col_idx)
+                
+                # Format positive/negative with appropriate colors
+                if abs(diff) > 0.01:
+                    cell.value = diff
+                    cell.number_format = '$#,##0.00'
+                    
+                    # Color code: red for negative (bank has less), blue for positive (bank has more)
+                    if diff > 0:
+                        cell.font = Font(color='0000FF', bold=True)  # Blue for positive
+                    else:
+                        cell.font = Font(color='FF0000', bold=True)  # Red for negative
+                else:
+                    cell.value = 0
+                    cell.number_format = '$#,##0.00'
+                    cell.font = Font(color='008000', bold=True)  # Green for zero
+    
     # Save
     workbook.save(output_path)
     workbook.close()
@@ -236,6 +268,10 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
     print(f"  - Matched cells (green): {matched_cells_count}")
     print(f"  - GC 1416 allocations: {gc_1416_cells_count}")
     print(f"  - Unmatched cells (red): {unmatched_cells_count}")
+    if deposit_discrepancies:
+        non_zero_diffs = sum(1 for d in deposit_discrepancies.values() if abs(d) > 0.01)
+        if non_zero_diffs > 0:
+            print(f"  - Discrepancy row added with {non_zero_diffs} non-zero values")
 
 if __name__ == "__main__":
     # Test the preprocessor
