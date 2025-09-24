@@ -106,7 +106,7 @@ class BankReconciliationApp:
                     "Forward Days for Matching",
                     min_value=1,
                     max_value=30,
-                    value=3,
+                    value=4,
                     help="Number of days to look forward when matching transactions"
                 )
                 
@@ -131,7 +131,7 @@ class BankReconciliationApp:
                         "Max Transactions per Cell",
                         min_value=1,
                         max_value=20,
-                        value=3,
+                        value=5,
                         help="Maximum number of transactions one cell can consume (prevents greedy matching)"
                     )
                     
