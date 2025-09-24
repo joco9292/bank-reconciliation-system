@@ -32,6 +32,14 @@ from main_with_deposits import (
     run_combined_analysis
 )
 
+# Import anti-greedy matching solution
+try:
+    from matchers.anti_greedy_matching import create_anti_greedy_matcher
+    ANTI_GREEDY_AVAILABLE = True
+except ImportError:
+    ANTI_GREEDY_AVAILABLE = False
+    print("Note: Anti-greedy matching not available")
+
 class BankReconciliationApp:
     def __init__(self):
         self.init_session_state()
@@ -108,6 +116,91 @@ class BankReconciliationApp:
                     help="Show detailed matching information"
                 )
                 
+                # Anti-Greedy Matching Settings
+                st.markdown("**🛡️ Anti-Greedy Matching**")
+                st.markdown("*Prevent one cell from consuming all available transactions*")
+                
+                enable_anti_greedy = st.checkbox(
+                    "Enable Anti-Greedy Matching",
+                    value=True,
+                    help="Prevents one cell from 'eating up' all transactions, ensuring fair distribution"
+                )
+                
+                if enable_anti_greedy:
+                    max_transactions_per_cell = st.number_input(
+                        "Max Transactions per Cell",
+                        min_value=1,
+                        max_value=20,
+                        value=3,
+                        help="Maximum number of transactions one cell can consume (prevents greedy matching)"
+                    )
+                    
+                    enable_fair_allocation = st.checkbox(
+                        "Enable Fair Allocation",
+                        value=True,
+                        help="Distribute transactions fairly across all cells"
+                    )
+                    
+                    if enable_fair_allocation:
+                        fairness_threshold = st.slider(
+                            "Fairness Threshold (%)",
+                            min_value=10,
+                            max_value=50,
+                            value=20,
+                            help="Minimum percentage of transactions to reserve for other cells"
+                        ) / 100.0
+                    else:
+                        fairness_threshold = 0.2
+                else:
+                    max_transactions_per_cell = None
+                    enable_fair_allocation = False
+                    fairness_threshold = 0.2
+                
+                # Cleanup Pass Settings
+                st.markdown("**🧹 Cleanup Pass**")
+                st.markdown("*Match leftover transactions to cells that could benefit*")
+                
+                enable_cleanup_pass = st.checkbox(
+                    "Enable Cleanup Pass",
+                    value=True,
+                    help="Attempt to match leftover transactions to unmatched cells (extends forward days by 1-2 days)"
+                )
+                
+                if enable_cleanup_pass:
+                    cleanup_extra_days = st.slider(
+                        "Extra Days for Cleanup",
+                        min_value=1,
+                        max_value=3,
+                        value=2,
+                        help="Additional days to look forward when attempting cleanup matches"
+                    )
+                else:
+                    cleanup_extra_days = 0
+                
+                # Show current anti-greedy configuration
+                if enable_anti_greedy and max_transactions_per_cell is not None:
+                    st.info(f"🛡️ **Anti-greedy matching enabled**\n"
+                           f"- Max transactions per cell: {max_transactions_per_cell}\n"
+                           f"- Fair allocation: {'Yes' if enable_fair_allocation else 'No'}\n"
+                           f"- Fairness threshold: {int(fairness_threshold * 100)}%")
+                elif enable_anti_greedy:
+                    st.warning("⚠️ Anti-greedy matching enabled but no limit set")
+                else:
+                    st.info("ℹ️ Using standard matching (no anti-greedy protection)")
+                
+                # Show Amex extra day information
+                st.info(f"💳 **Card Type Settings**\n"
+                       f"- Forward days: {forward_days} days\n"
+                       f"- Amex gets extra day: {forward_days + 1} days total")
+                
+                # Show cleanup pass information
+                if enable_cleanup_pass:
+                    st.info(f"🧹 **Cleanup Pass Enabled**\n"
+                           f"- Extra days for cleanup: {cleanup_extra_days}\n"
+                           f"- Total cleanup window: {forward_days + cleanup_extra_days} days")
+                else:
+                    st.info("🧹 **Cleanup Pass Disabled**")
+                
             # Processing statistics
             if st.session_state.processing_complete:
                 st.markdown("---")
@@ -115,7 +208,7 @@ class BankReconciliationApp:
                 if st.session_state.generated_files:
                     st.metric("Files Generated", len(st.session_state.generated_files))
                     
-            return forward_days, verbose
+            return forward_days, verbose, enable_anti_greedy, max_transactions_per_cell, enable_fair_allocation, fairness_threshold, enable_cleanup_pass, cleanup_extra_days
     
     def validate_csv_text(self, csv_text):
         """Validate CSV text input"""
@@ -303,7 +396,75 @@ class BankReconciliationApp:
             st.error(f"Error saving files: {str(e)}")
             return None
     
-    def process_files(self, file_paths, forward_days, verbose):
+    def run_card_matching_with_config(self, card_summary_path, bank_statement_path, output_dir, verbose, forward_days, enable_anti_greedy, max_transactions_per_cell, enable_fair_allocation, fairness_threshold, enable_cleanup_pass, cleanup_extra_days):
+        """Run card matching with anti-greedy configuration if enabled"""
+        if enable_anti_greedy and ANTI_GREEDY_AVAILABLE and max_transactions_per_cell is not None:
+            # Use anti-greedy matching
+            from matchers.anti_greedy_matching import create_anti_greedy_matcher
+            import pandas as pd
+            from processors.preprocess_bank_statement import preprocess_bank_statement
+            from processors.preprocess_card_summary import preprocess_card_summary_dynamic
+            from highlighting_functions import create_highlighted_bank_statement, extract_matched_info_from_results
+            from exclusive_discrepancy import calculate_total_discrepancies_by_card_type_exclusive
+            
+            print("=== Using Anti-Greedy Card Matching ===\n")
+            
+            # Load data
+            bank_statement = preprocess_bank_statement(bank_statement_path)
+            card_summary, structure_info = preprocess_card_summary_dynamic(card_summary_path)
+            
+            # Create anti-greedy matcher
+            matcher = create_anti_greedy_matcher(
+                max_transactions_per_cell=max_transactions_per_cell,
+                enable_fair_allocation=enable_fair_allocation
+            )
+            
+            # Run anti-greedy matching
+            results = matcher.match_with_anti_greedy(
+                card_summary, bank_statement, 
+                forward_days=forward_days, verbose=verbose
+            )
+            
+            # Extract info and generate reports (same as original)
+            matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
+            
+            # Calculate discrepancies by card type
+            discrepancies_by_type, first_matched_date = calculate_total_discrepancies_by_card_type_exclusive(
+                results, bank_statement, matched_bank_rows
+            )
+            
+            # Print discrepancy summary (optional)
+            if verbose:
+                print("\n=== CARD TYPE DISCREPANCIES ===")
+                if first_matched_date:
+                    print(f"(Calculated from {first_matched_date.strftime('%Y-%m-%d')} onwards)")
+                for card_type, disc in sorted(discrepancies_by_type.items()):
+                    if abs(disc) > 0.01:
+                        if disc > 0:
+                            print(f"{card_type}: +${disc:,.2f} (bank has more)")
+                        else:
+                            print(f"{card_type}: -${abs(disc):,.2f} (bank has less)")
+            
+            # Generate highlighted reports (same as original)
+            create_highlighted_bank_statement(
+                bank_statement, results, output_dir, 
+                matched_bank_rows, differences_by_row
+            )
+            
+            print(f"✓ Anti-greedy card matching complete. Files saved to {output_dir}/")
+            
+            return results, discrepancies_by_type, first_matched_date
+        else:
+            # Use regular matching
+            return run_card_matching(
+                card_summary_path=card_summary_path,
+                bank_statement_path=bank_statement_path,
+                output_dir=output_dir,
+                verbose=verbose,
+                forward_days=forward_days
+            )
+
+    def process_files(self, file_paths, forward_days, verbose, enable_anti_greedy, max_transactions_per_cell, enable_fair_allocation, fairness_threshold, enable_cleanup_pass, cleanup_extra_days):
         """Process the uploaded files"""
         try:
             progress_bar = st.progress(0)
@@ -319,13 +480,23 @@ class BankReconciliationApp:
                     status_text.text("Loading files...")
                     
                     progress_bar.progress(50)
-                    status_text.text("Matching credit card transactions...")
+                    if enable_anti_greedy and max_transactions_per_cell is not None:
+                        status_text.text(f"🛡️ Anti-greedy matching credit card transactions (max {max_transactions_per_cell} per cell, Amex gets {forward_days + 1} days)...")
+                    else:
+                        status_text.text(f"Matching credit card transactions (Amex gets {forward_days + 1} days)...")
                     
-                    results, discrepancies, first_matched_date = run_card_matching(
+                    results, discrepancies, first_matched_date = self.run_card_matching_with_config(
                         card_summary_path=file_paths['card'],
                         bank_statement_path=file_paths['bank'],
                         output_dir=st.session_state.temp_dir,
-                        verbose=verbose
+                        verbose=verbose,
+                        forward_days=forward_days,
+                        enable_anti_greedy=enable_anti_greedy,
+                        max_transactions_per_cell=max_transactions_per_cell,
+                        enable_fair_allocation=enable_fair_allocation,
+                        fairness_threshold=fairness_threshold,
+                        enable_cleanup_pass=enable_cleanup_pass,
+                        cleanup_extra_days=cleanup_extra_days
                     )
                     
                     st.session_state.results = {
@@ -346,7 +517,8 @@ class BankReconciliationApp:
                         deposit_slip_path=file_paths['deposit'],
                         bank_statement_path=file_paths['bank'],
                         output_dir=st.session_state.temp_dir,
-                        verbose=verbose
+                        verbose=verbose,
+                        forward_days=forward_days
                     )
                     
                     st.session_state.results = {
@@ -366,7 +538,8 @@ class BankReconciliationApp:
                         deposit_slip_path=file_paths['deposit'],
                         bank_statement_path=file_paths['bank'],
                         output_dir=st.session_state.temp_dir,
-                        verbose=verbose
+                        verbose=verbose,
+                        forward_days=forward_days
                     )
                     
                     st.session_state.results = {
@@ -538,7 +711,7 @@ class BankReconciliationApp:
         self.render_header()
         
         # Sidebar configuration
-        forward_days, verbose = self.render_sidebar()
+        forward_days, verbose, enable_anti_greedy, max_transactions_per_cell, enable_fair_allocation, fairness_threshold, enable_cleanup_pass, cleanup_extra_days = self.render_sidebar()
         
         # File upload section with text input option
         bank_file, bank_csv_text, bank_df, card_file, deposit_file = self.render_file_upload()
@@ -608,7 +781,7 @@ class BankReconciliationApp:
                     )
                 
                 if file_paths:
-                    success = self.process_files(file_paths, forward_days, verbose)
+                    success = self.process_files(file_paths, forward_days, verbose, enable_anti_greedy, max_transactions_per_cell, enable_fair_allocation, fairness_threshold, enable_cleanup_pass, cleanup_extra_days)
                     
                     if success:
                         st.success("✅ Processing completed successfully!")

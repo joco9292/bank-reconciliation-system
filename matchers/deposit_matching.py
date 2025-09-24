@@ -452,7 +452,7 @@ class DepositMatcher:
 
 # Example usage function
 def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
-                        output_dir: str = '.', verbose: bool = False):
+                        output_dir: str = '.', verbose: bool = False, forward_days: int = 3):
     """
     Complete deposit slip processing workflow.
     """
@@ -473,7 +473,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     print("\nStep 2: Running deposit matching...")
     matcher = DepositMatcher()
     results = matcher.match_deposit_transactions(deposit_slip, bank_statement, 
-                                                forward_days=14, verbose=verbose)
+                                                forward_days=forward_days, verbose=verbose)
     
     # Extract info for highlighting
     gc_1416_allocations = results.get('_gc_1416_allocations', {})

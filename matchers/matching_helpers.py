@@ -237,6 +237,79 @@ class TransactionMatcher:
         
         return filters
     
+    def _attempt_cleanup_matching(self, leftover_transactions: pd.DataFrame, 
+                                 results: Dict, forward_days: int, verbose: bool = False) -> Dict:
+        """
+        Attempt to match leftover transactions to cells that could benefit.
+        Only looks forward within 1-2 extra days to avoid matching too far out.
+        """
+        cleanup_matches = {}
+        
+        # Group leftover transactions by card type
+        leftover_by_card_type = leftover_transactions.groupby('Card_Type')
+        
+        for card_type, card_transactions in leftover_by_card_type:
+            if card_type == 'Unknown':
+                continue  # Skip unknown card types
+            
+            # Try to match these transactions to cells of the same card type
+            for date, date_results in results.items():
+                if card_type in date_results.get('unmatched_by_card_type', {}):
+                    unmatched_info = date_results['unmatched_by_card_type'][card_type]
+                    expected_amount = unmatched_info['expected']
+                    
+                    # Check if any leftover transactions could help this cell
+                    # Use extended forward days (1-2 extra days) for cleanup
+                    extended_forward_days = forward_days + 2
+                    
+                    # Filter transactions within extended date range
+                    date_end = date + timedelta(days=extended_forward_days)
+                    extended_transactions = card_transactions[
+                        (card_transactions['Date'] >= date) &
+                        (card_transactions['Date'] <= date_end)
+                    ]
+                    
+                    if len(extended_transactions) == 0:
+                        continue
+                    
+                    # Try to find a match using the same filters
+                    filters_to_apply = self.get_filters_for_card_type(card_type)
+                    
+                    for filter_name, filter_func in filters_to_apply:
+                        result = filter_func(extended_transactions, expected_amount)
+                        
+                        if result['matched']:
+                            # Found a cleanup match!
+                            cleanup_matches[(date, card_type)] = {
+                                'expected': expected_amount,
+                                'match_type': f'cleanup_{result["match_type"]}',
+                                'transactions': result['transactions'],
+                                'bank_rows': result['bank_rows'],
+                                'actual_total': result.get('actual_total', expected_amount),
+                                'difference': result.get('difference', 0),
+                                'cleanup_extended_days': extended_forward_days,
+                                **{k: v for k, v in result.items() 
+                                   if k not in ['matched', 'match_type', 'transactions', 
+                                               'bank_rows', 'actual_total', 'difference']}
+                            }
+                            
+                            if verbose:
+                                print(f"    Found cleanup match for {date.strftime('%Y-%m-%d')} {card_type}: "
+                                      f"${result.get('actual_total', expected_amount):,.2f} "
+                                      f"(extended to {extended_forward_days} days)")
+                            
+                            # Remove matched transactions from leftover pool
+                            leftover_transactions = leftover_transactions[
+                                ~leftover_transactions['Bank_Row_Number'].isin(result['bank_rows'])
+                            ]
+                            break  # Move to next cell
+                    
+                    # If we found a match for this cell, don't try other cells
+                    if (date, card_type) in cleanup_matches:
+                        break
+        
+        return cleanup_matches
+    
     def match_transactions(self, card_summary: pd.DataFrame, bank_statement: pd.DataFrame, 
                           forward_days: int = 3, verbose: bool = False) -> Dict:
         """
@@ -396,8 +469,47 @@ class TransactionMatcher:
                       f"Found ${total_found:,.2f} "
                       f"in {len(available_df)} EXCLUSIVELY allocated transactions")
         
+        # PASS 3: Cleanup pass - try to match leftover transactions to cells that could benefit
+        # This helps ensure no transactions are left behind
+        if not verbose:
+            print("\nPass 3: Cleanup pass - attempting to match leftover transactions...")
+        
+        # Find all unmatched bank transactions
+        all_bank_rows = set(bank_statement['Bank_Row_Number'].tolist())
+        leftover_bank_rows = all_bank_rows - matched_bank_rows - set(allocated_for_discrepancy.keys())
+        
+        if len(leftover_bank_rows) > 0:
+            if verbose:
+                print(f"Found {len(leftover_bank_rows)} leftover transactions to attempt cleanup matching")
+            
+            # Get leftover transactions
+            leftover_transactions = bank_statement[
+                bank_statement['Bank_Row_Number'].isin(leftover_bank_rows)
+            ].copy()
+            
+            # Try to match leftover transactions to cells that could benefit
+            cleanup_matches = self._attempt_cleanup_matching(
+                leftover_transactions, results, forward_days, verbose
+            )
+            
+            # Apply cleanup matches if any found
+            if cleanup_matches:
+                for (date, card_type), match_info in cleanup_matches.items():
+                    if date in results and 'matches_by_card_type' in results[date]:
+                        results[date]['matches_by_card_type'][card_type] = match_info
+                        matched_bank_rows.update(match_info['bank_rows'])
+                        
+                        # Remove from unmatched if it was there
+                        if card_type in results[date]['unmatched_by_card_type']:
+                            del results[date]['unmatched_by_card_type'][card_type]
+                        
+                        if verbose:
+                            print(f"  ✓ Cleanup match: {date.strftime('%Y-%m-%d')} {card_type} "
+                                  f"matched ${match_info['actual_total']:,.2f}")
+        
         # Add allocation info to results for reporting
         results['_allocated_for_discrepancy'] = allocated_for_discrepancy
         results['_attempted_bank_rows'] = attempted_bank_rows
+        results['_cleanup_attempted'] = len(leftover_bank_rows) > 0
         
         return results

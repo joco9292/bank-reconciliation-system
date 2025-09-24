@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime
 
 def run_card_matching(card_summary_path: str, bank_statement_path: str, 
-                      output_dir: str = '.', verbose: bool = False):
+                      output_dir: str = '.', verbose: bool = False, forward_days: int = 3):
     """
     Run the credit card matching process.
     """
@@ -34,7 +34,7 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
     
     # Run matching
     results = matcher.match_transactions(card_summary, bank_statement, 
-                                        forward_days=6, verbose=verbose)
+                                        forward_days=forward_days, verbose=verbose)
     
     # Extract info and generate reports
     matched_bank_rows, matched_dates_and_types, differences_by_row, differences_by_date_type, unmatched_info = extract_matched_info_from_results(results)
@@ -80,7 +80,7 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
     return results, discrepancies_by_type, first_matched_date
 
 def run_deposit_matching(deposit_slip_path: str, bank_statement_path: str, 
-                        output_dir: str = '.', verbose: bool = False):
+                        output_dir: str = '.', verbose: bool = False, forward_days: int = 3):
     """
     Run the deposit slip matching process.
     """
@@ -90,14 +90,15 @@ def run_deposit_matching(deposit_slip_path: str, bank_statement_path: str,
         deposit_slip_path=deposit_slip_path,
         bank_statement_path=bank_statement_path,
         output_dir=output_dir,
-        verbose=verbose
+        verbose=verbose,
+        forward_days=forward_days
     )
     
     return results
 
 def run_combined_analysis(card_summary_path: str, deposit_slip_path: str, 
                          bank_statement_path: str, output_dir: str = '.', 
-                         verbose: bool = False):
+                         verbose: bool = False, forward_days: int = 3):
     """
     Run both card and deposit matching, then create a combined analysis.
     """
@@ -120,14 +121,14 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
     
     # Run card matching - NOW RECEIVES THREE VALUES
     card_results, card_discrepancies, first_matched_date = run_card_matching(
-        card_summary_path, bank_statement_path, output_dir, verbose
+        card_summary_path, bank_statement_path, output_dir, verbose, forward_days
     )
     
     print("\n" + "-"*60)
     
     # Run deposit matching
     deposit_results = run_deposit_matching(deposit_slip_path, bank_statement_path, 
-                                          output_dir, verbose)
+                                          output_dir, verbose, forward_days)
     
     # Combined summary
     print("\n" + "="*60)
