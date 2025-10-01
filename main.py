@@ -373,12 +373,18 @@ if __name__ == "__main__":
         # Step 8: Create highlighted copies of original files
         print("\nStep 7: Creating highlighted copies of original files...")
         
+        # Extract transaction details for comments
+        from highlighting_functions import extract_transaction_details_for_comments
+        transaction_details, match_type_info = extract_transaction_details_for_comments(results, bank_statement)
+        
         # Create highlighted bank statement
         create_highlighted_bank_statement(
             bank_statement_path=SINGLE_BANK_STATEMENT_PATH,
             matched_bank_rows=matched_bank_rows,
             output_path='bank_statement_highlighted.xlsx',
-            differences_by_row=differences_by_row
+            differences_by_row=differences_by_row,
+            transaction_details=transaction_details,
+            match_type_info=match_type_info
         )
         
         # Create highlighted card summary with comprehensive discrepancies

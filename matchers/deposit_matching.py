@@ -516,13 +516,27 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
         deposit_discrepancies=deposit_discrepancies
     )
     
+    # Extract transaction details for comments
+    from highlighting_functions import (
+        create_highlighted_bank_statement, 
+        extract_transaction_details_for_comments,
+        extract_unmatched_transactions_for_comments,
+        extract_gc_transactions_for_comments
+    )
+    transaction_details, match_type_info = extract_transaction_details_for_comments(results, bank_statement)
+    unmatched_transactions = extract_unmatched_transactions_for_comments(results, bank_statement)
+    gc_transactions = extract_gc_transactions_for_comments(results, bank_statement)
+    
     # Create highlighted bank statement
-    from highlighting_functions import create_highlighted_bank_statement
     bank_highlighted_path = f"{output_dir}/bank_statement_deposit_highlighted.xlsx"
     create_highlighted_bank_statement(
         bank_statement_path=bank_statement_path,
         matched_bank_rows=matched_bank_rows,
-        output_path=bank_highlighted_path
+        output_path=bank_highlighted_path,
+        transaction_details=transaction_details,
+        match_type_info=match_type_info,
+        unmatched_transactions=unmatched_transactions,
+        gc_transactions=gc_transactions
     )
     
     print("\n=== DEPOSIT PROCESSING COMPLETE ===")

@@ -56,12 +56,26 @@ def run_card_matching(card_summary_path: str, bank_statement_path: str,
                 else:
                     print(f"{card_type}: -${abs(disc):,.2f} (bank has less)")
     
+    # Extract transaction details for comments
+    from highlighting_functions import (
+        extract_transaction_details_for_comments, 
+        extract_unmatched_transactions_for_comments,
+        extract_gc_transactions_for_comments
+    )
+    transaction_details, match_type_info = extract_transaction_details_for_comments(results, bank_statement)
+    unmatched_transactions = extract_unmatched_transactions_for_comments(results, bank_statement)
+    gc_transactions = extract_gc_transactions_for_comments(results, bank_statement)
+    
     # Create highlighted files
     create_highlighted_bank_statement(
         bank_statement_path=bank_statement_path,
         matched_bank_rows=matched_bank_rows,
         output_path=f'{output_dir}/bank_statement_cards_highlighted.xlsx',
-        differences_by_row=differences_by_row
+        differences_by_row=differences_by_row,
+        transaction_details=transaction_details,
+        match_type_info=match_type_info,
+        unmatched_transactions=unmatched_transactions,
+        gc_transactions=gc_transactions
     )
     
     # MODIFY THIS CALL to include differences_by_card_type
@@ -203,8 +217,22 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
         elif total_card_discrepancy < 0:
             print("  (Negative = card summary expects more than bank statement shows)")
     
-    # Create combined highlighted bank statement with the new function
-    from highlighting_functions import create_combined_highlighted_bank_statement
+    # Extract transaction details for comments
+    from highlighting_functions import (
+        create_combined_highlighted_bank_statement, 
+        extract_transaction_details_for_comments,
+        extract_unmatched_transactions_for_comments,
+        extract_gc_transactions_for_comments
+    )
+    
+    # Extract transaction details for both card and deposit matches
+    card_transaction_details, card_match_type_info = extract_transaction_details_for_comments(card_results, bank_statement)
+    deposit_transaction_details, deposit_match_type_info = extract_transaction_details_for_comments(deposit_results, bank_statement)
+    
+    # Extract unmatched and GC transactions
+    card_unmatched_transactions = extract_unmatched_transactions_for_comments(card_results, bank_statement)
+    deposit_unmatched_transactions = extract_unmatched_transactions_for_comments(deposit_results, bank_statement)
+    gc_transactions = extract_gc_transactions_for_comments(deposit_results, bank_statement)
     
     combined_output = f'{output_dir}/bank_statement_combined_highlighted.xlsx'
     
@@ -214,7 +242,14 @@ def run_combined_analysis(card_summary_path: str, deposit_slip_path: str,
         deposit_matched_rows=deposit_matched_rows,
         card_attempted_rows=card_attempted_rows,
         deposit_attempted_rows=deposit_attempted_rows,
-        output_path=combined_output
+        output_path=combined_output,
+        card_transaction_details=card_transaction_details,
+        deposit_transaction_details=deposit_transaction_details,
+        card_match_type_info=card_match_type_info,
+        deposit_match_type_info=deposit_match_type_info,
+        card_unmatched_transactions=card_unmatched_transactions,
+        deposit_unmatched_transactions=deposit_unmatched_transactions,
+        gc_transactions=gc_transactions
     )
     
     print("\n" + "="*60)

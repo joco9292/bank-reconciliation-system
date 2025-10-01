@@ -445,10 +445,26 @@ class BankReconciliationApp:
                         else:
                             print(f"{card_type}: -${abs(disc):,.2f} (bank has less)")
             
+            # Extract transaction details for comments
+            from highlighting_functions import (
+                extract_transaction_details_for_comments,
+                extract_unmatched_transactions_for_comments,
+                extract_gc_transactions_for_comments
+            )
+            transaction_details, match_type_info = extract_transaction_details_for_comments(results, bank_statement)
+            unmatched_transactions = extract_unmatched_transactions_for_comments(results, bank_statement)
+            gc_transactions = extract_gc_transactions_for_comments(results, bank_statement)
+            
             # Generate highlighted reports (same as original)
             create_highlighted_bank_statement(
-                bank_statement, results, output_dir, 
-                matched_bank_rows, differences_by_row
+                bank_statement_path=bank_statement_path,
+                matched_bank_rows=matched_bank_rows,
+                output_path=f'{output_dir}/bank_statement_cards_highlighted.xlsx',
+                differences_by_row=differences_by_row,
+                transaction_details=transaction_details,
+                match_type_info=match_type_info,
+                unmatched_transactions=unmatched_transactions,
+                gc_transactions=gc_transactions
             )
             
             print(f"✓ Anti-greedy card matching complete. Files saved to {output_dir}/")
