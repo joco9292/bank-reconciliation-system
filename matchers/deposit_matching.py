@@ -5,24 +5,24 @@ from itertools import combinations
 
 class DepositMatcher:
     """
-    Specialized matcher for deposit slips with GC 1416 transaction handling.
-    GC 1416 transactions can match to either Cash or Check columns.
+    Specialized matcher for deposit slips with GC transaction handling.
+    GC transactions can match to either Cash or Check columns.
     """
     
     def __init__(self):
-        self.gc_1416_identifier = 'GC 1416'
+        self.gc_identifier = 'GC'
         
     def identify_deposit_type(self, description: str) -> List[str]:
         """
         Identify deposit type from transaction description.
-        GC 1416 can be both Cash and Check.
+        GC transactions can be both Cash and Check.
         
         Returns:
-            List of possible deposit types (usually one, but two for GC 1416)
+            List of possible deposit types (usually one, but two for GC transactions)
         """
         description_upper = description.upper()
         
-        if self.gc_1416_identifier in description_upper:
+        if self.gc_identifier in description_upper:
             return ['Cash', 'Check']  # Can be either
         
         # Add other specific identifiers if needed
@@ -55,45 +55,45 @@ class DepositMatcher:
         else:
             return pd.DataFrame()
     
-    def allocate_gc_1416_optimally(self, gc_1416_transactions: pd.DataFrame,
+    def allocate_gc_optimally(self, gc_transactions: pd.DataFrame,
                                   cash_expected: float, check_expected: float,
                                   tolerance: float = 0.01) -> Dict:
         """
-        Optimally allocate GC 1416 transactions between Cash and Check to minimize discrepancy.
+        Optimally allocate GC transactions between Cash and Check to minimize discrepancy.
         
         This is the key differentiator - we need to decide how to split ambiguous transactions.
         """
-        if gc_1416_transactions.empty:
-            return {'matched': False, 'reason': 'No GC 1416 transactions found'}
+        if gc_transactions.empty:
+            return {'matched': False, 'reason': 'No GC transactions found'}
         
-        total_gc = gc_1416_transactions['Amount'].sum()
+        total_gc = gc_transactions['Amount'].sum()
         total_expected = cash_expected + check_expected
         
         # Strategy 1: If total matches exactly, try to allocate proportionally
         if abs(total_gc - total_expected) < tolerance:
             # Try exact matching first
-            for cash_combo_size in range(len(gc_1416_transactions) + 1):
-                for cash_combo in combinations(gc_1416_transactions.index, cash_combo_size):
+            for cash_combo_size in range(len(gc_transactions) + 1):
+                for cash_combo in combinations(gc_transactions.index, cash_combo_size):
                     cash_indices = list(cash_combo)
-                    check_indices = [idx for idx in gc_1416_transactions.index if idx not in cash_indices]
+                    check_indices = [idx for idx in gc_transactions.index if idx not in cash_indices]
                     
-                    cash_sum = gc_1416_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
-                    check_sum = gc_1416_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
+                    cash_sum = gc_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
+                    check_sum = gc_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
                     
                     if abs(cash_sum - cash_expected) < tolerance and abs(check_sum - check_expected) < tolerance:
                         return {
                             'matched': True,
-                            'match_type': 'gc_1416_optimal_split',
+                            'match_type': 'gc_optimal_split',
                             'cash_allocation': {
-                                'transactions': gc_1416_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
-                                'bank_rows': gc_1416_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
+                                'transactions': gc_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
+                                'bank_rows': gc_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
                                 'total': cash_sum,
                                 'expected': cash_expected,
                                 'difference': cash_sum - cash_expected
                             },
                             'check_allocation': {
-                                'transactions': gc_1416_transactions.loc[check_indices].to_dict('records') if check_indices else [],
-                                'bank_rows': gc_1416_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
+                                'transactions': gc_transactions.loc[check_indices].to_dict('records') if check_indices else [],
+                                'bank_rows': gc_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
                                 'total': check_sum,
                                 'expected': check_expected,
                                 'difference': check_sum - check_expected
@@ -106,7 +106,7 @@ class DepositMatcher:
             cash_ratio = cash_expected / total_expected
             
             # Sort transactions by amount to make allocation more stable
-            sorted_trans = gc_1416_transactions.sort_values('Amount', ascending=False)
+            sorted_trans = gc_transactions.sort_values('Amount', ascending=False)
             
             cash_allocated = 0
             cash_indices = []
@@ -119,22 +119,22 @@ class DepositMatcher:
                 else:
                     check_indices.append(idx)
             
-            cash_sum = gc_1416_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
-            check_sum = gc_1416_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
+            cash_sum = gc_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
+            check_sum = gc_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
             
             return {
                 'matched': True,
-                'match_type': 'gc_1416_proportional_split',
+                'match_type': 'gc_proportional_split',
                 'cash_allocation': {
-                    'transactions': gc_1416_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
-                    'bank_rows': gc_1416_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
+                    'transactions': gc_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
+                    'bank_rows': gc_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
                     'total': cash_sum,
                     'expected': cash_expected,
                     'difference': cash_sum - cash_expected
                 },
                 'check_allocation': {
-                    'transactions': gc_1416_transactions.loc[check_indices].to_dict('records') if check_indices else [],
-                    'bank_rows': gc_1416_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
+                    'transactions': gc_transactions.loc[check_indices].to_dict('records') if check_indices else [],
+                    'bank_rows': gc_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
                     'total': check_sum,
                     'expected': check_expected,
                     'difference': check_sum - check_expected
@@ -142,7 +142,7 @@ class DepositMatcher:
                 'total_difference': (cash_sum + check_sum) - total_expected
             }
         
-        return {'matched': False, 'reason': 'Could not allocate GC 1416 transactions optimally'}
+        return {'matched': False, 'reason': 'Could not allocate GC transactions optimally'}
     
     def match_deposit_transactions(self, deposit_slip: pd.DataFrame, 
                                 bank_statement: pd.DataFrame,
@@ -173,32 +173,32 @@ class DepositMatcher:
             if cash_expected == 0 and check_expected == 0:
                 continue
             
-            # Find all GC 1416 transactions in date range
+            # Find all GC transactions in date range
             # Only consider CREDIT transactions (money coming in) for deposit matching
             date_end = date + timedelta(days=forward_days)
             
-            gc_1416_trans = bank_statement[
+            gc_trans = bank_statement[
                 ((bank_statement['Description'].str.upper() == 'CASH/CHECK') |
                 (bank_statement['Description'].str.contains('Cash/Check', case=False, na=False)) |
-                (bank_statement['Description'].str.contains('GC 1416', case=False, na=False))) &
+                (bank_statement['Description'].str.contains('GC', case=False, na=False))) &
                 (bank_statement['Date'] >= date) &
                 (bank_statement['Date'] <= date_end) &
                 (bank_statement['Transaction_Type'] == 'CREDIT')
             ].copy()
             
             # Track all candidate bank rows as "attempted"
-            if len(gc_1416_trans) > 0:
-                candidate_rows = set(gc_1416_trans['Bank_Row_Number'].tolist())
+            if len(gc_trans) > 0:
+                candidate_rows = set(gc_trans['Bank_Row_Number'].tolist())
                 attempted_bank_rows.update(candidate_rows)
             
             if verbose:
                 print(f"\nScanning {date.strftime('%Y-%m-%d')}: Cash=${cash_expected:,.2f}, Check=${check_expected:,.2f}")
-                print(f"  Found {len(gc_1416_trans)} potential GC 1416 transactions")
+                print(f"  Found {len(gc_trans)} potential GC transactions")
             
             # Find best match for Cash if expected
-            if cash_expected > 0 and len(gc_1416_trans) > 0:
+            if cash_expected > 0 and len(gc_trans) > 0:
                 best_match = self.find_best_combination(
-                    gc_1416_trans, cash_expected, tolerance=0.01, max_ratio=2.0
+                    gc_trans, cash_expected, tolerance=0.01, max_ratio=2.0
                 )
                 if best_match['combo_size'] > 0:
                     all_potential_matches.append({
@@ -210,9 +210,9 @@ class DepositMatcher:
                     })
             
             # Find best match for Check if expected  
-            if check_expected > 0 and len(gc_1416_trans) > 0:
+            if check_expected > 0 and len(gc_trans) > 0:
                 best_match = self.find_best_combination(
-                    gc_1416_trans, check_expected, tolerance=0.01, max_ratio=2.0
+                    gc_trans, check_expected, tolerance=0.01, max_ratio=2.0
                 )
                 if best_match['combo_size'] > 0:
                     all_potential_matches.append({
@@ -299,14 +299,14 @@ class DepositMatcher:
                         # No match found at all
                         results[date]['unmatched_by_type'][deposit_type] = {
                             'expected': expected,
-                            'reason': 'No matching GC 1416 transactions found',
+                            'reason': 'No matching GC transactions found',
                             'best_match': None
                         }
         
         # CRITICAL: Add metadata - This is what was missing!
         results['_matched_bank_rows'] = matched_bank_rows
         results['_attempted_bank_rows'] = attempted_bank_rows
-        results['_gc_1416_allocations'] = {}
+        results['_gc_allocations'] = {}
         
         if verbose:
             print(f"\nDEBUG: Returning {len(matched_bank_rows)} matched bank rows")
@@ -401,7 +401,7 @@ class DepositMatcher:
         allocation_details = []
         
         # Extract metadata
-        gc_1416_allocations = results.pop('_gc_1416_allocations', {})
+        gc_allocations = results.pop('_gc_allocations', {})
         matched_bank_rows = results.pop('_matched_bank_rows', set())
         attempted_bank_rows = results.pop('_attempted_bank_rows', set())
         
@@ -436,7 +436,7 @@ class DepositMatcher:
                     'Date': date,
                     'Type': deposit_type,
                     'Expected': unmatch_info['expected'],
-                    'GC_1416_Found': unmatch_info.get('gc_1416_found', 0),
+                    'GC_Found': unmatch_info.get('gc_found', 0),
                     'Status': 'Unmatched',
                     'Reason': unmatch_info['reason']
                 })
@@ -445,8 +445,12 @@ class DepositMatcher:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             if summary_data:
                 pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            else:
+                # Create empty Summary sheet if no data to ensure at least one visible sheet
+                pd.DataFrame([{'Message': 'No deposit matching data found'}]).to_excel(writer, sheet_name='Summary', index=False)
+            
             if allocation_details:
-                pd.DataFrame(allocation_details).to_excel(writer, sheet_name='GC_1416_Allocations', index=False)
+                pd.DataFrame(allocation_details).to_excel(writer, sheet_name='GC_Allocations', index=False)
         
         print(f"✓ Deposit matching report saved to: {output_path}")
 
@@ -476,7 +480,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
                                                 forward_days=forward_days, verbose=verbose)
     
     # Extract info for highlighting
-    gc_1416_allocations = results.get('_gc_1416_allocations', {})
+    gc_allocations = results.get('_gc_allocations', {})
     matched_bank_rows = results.get('_matched_bank_rows', set())
     
     # Create matched dates dict for highlighting
@@ -484,7 +488,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
     unmatched_info = {}
     
     for date, date_results in results.items():
-        if date in ['_gc_1416_allocations', '_matched_bank_rows', '_attempted_bank_rows']:
+        if date in ['_gc_allocations', '_matched_bank_rows', '_attempted_bank_rows']:
             continue
         
         matched_types = []
@@ -512,7 +516,7 @@ def process_deposit_slip(deposit_slip_path: str, bank_statement_path: str,
         matched_dates_and_types=matched_dates_and_types,
         output_path=highlighted_path,
         unmatched_info=unmatched_info,
-        gc_1416_allocation=gc_1416_allocations,
+        gc_allocation=gc_allocations,
         deposit_discrepancies=deposit_discrepancies
     )
     

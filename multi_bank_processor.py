@@ -1,7 +1,7 @@
 import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Font
 
 # Import existing modules
 from preprocess_bank_statement import preprocess_bank_statement
@@ -246,6 +246,9 @@ class MultiBankStatementProcessor:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             if summary_data:
                 pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            else:
+                # Create empty Summary sheet if no data to ensure at least one visible sheet
+                pd.DataFrame([{'Message': 'No matching data found'}]).to_excel(writer, sheet_name='Summary', index=False)
             if source_analysis:
                 pd.DataFrame(source_analysis).to_excel(writer, sheet_name='Source_Analysis', index=False)
         
