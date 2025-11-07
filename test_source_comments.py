@@ -21,7 +21,7 @@ def create_test_data():
             'VISA 1234 PURCHASE',           # Will match from card summary
             'AMEX 5678 CHARGE',             # Will match from card summary
             'UNKNOWN TRANSACTION',          # Will be unmatched
-            'GC 1416-DEPOSIT'               # Will match from deposit slip
+            'GC 1354-DEPOSIT'               # Will match from deposit slip
         ],
         'Amount': [150.00, 75.50, 200.25, 500.00],
         'Transaction_Type': ['CREDIT', 'CREDIT', 'CREDIT', 'CREDIT']
@@ -32,7 +32,7 @@ def create_test_data():
     df['Card_Type'] = df['Description'].apply(lambda x: 
         'Visa' if 'VISA' in x else 
         'Amex' if 'AMEX' in x else 
-        'GC' if 'GC 1416' in x else 
+        'GC' if 'GC' in x else 
         'Unknown'
     )
     
@@ -115,7 +115,7 @@ def test_source_comments():
     bank_statement['Card_Type'] = bank_statement['Description'].apply(lambda x: 
         'Visa' if 'VISA' in x else 
         'Amex' if 'AMEX' in x else 
-        'GC' if 'GC 1416' in x else 
+        'GC' if 'GC' in x else 
         'Unknown'
     )
     
@@ -198,3 +198,4 @@ def test_source_comments():
 
 if __name__ == "__main__":
     test_source_comments()
+

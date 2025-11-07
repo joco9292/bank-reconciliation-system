@@ -608,7 +608,7 @@ class BankReconciliationApp:
         
         # Display console output
         if st.session_state.console_output:
-            with st.expander("📝 Processing Log", expanded=True):
+            with st.expander("📝 Processing Log", expanded=False):
                 st.text(st.session_state.console_output)
         
         # Display any specific results based on mode

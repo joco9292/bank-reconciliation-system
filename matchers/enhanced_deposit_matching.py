@@ -1,7 +1,7 @@
 """
 Enhanced Deposit Matching Module
 Handles complex deposit matching scenarios including:
-1. Single GC 1416 transaction representing both Cash and Check
+1. Single GC transaction representing both Cash and Check
 2. Multiple different transactions aggregating into Cash OR Check
 3. Flexible transaction matching strategies
 """
@@ -15,15 +15,15 @@ class EnhancedDepositMatcher:
     """
     Enhanced matcher for deposit slips with flexible transaction aggregation.
     Handles:
-    - Single GC 1416 representing both Cash and Check
+    - Single GC transaction representing both Cash and Check
     - Multiple different transactions aggregating to Cash or Check
     - Various matching strategies
     """
     
     def __init__(self):
-        self.gc_1416_identifier = 'GC 1416'
-        self.cash_identifiers = ['CASH', 'GC 1416']
-        self.check_identifiers = ['CHECK', 'CHK', 'GC 1416']
+        self.gc_identifier = 'GC'
+        self.cash_identifiers = ['CASH', 'GC']
+        self.check_identifiers = ['CHECK', 'CHK', 'GC']
         
     def identify_possible_deposit_types(self, description: str) -> List[str]:
         """
@@ -32,8 +32,8 @@ class EnhancedDepositMatcher:
         """
         description_upper = description.upper()
         
-        # GC 1416 can be both
-        if self.gc_1416_identifier in description_upper:
+        # GC transactions can be both
+        if self.gc_identifier in description_upper:
             return ['Cash', 'Check', 'Both']
         
         # Check for specific identifiers
@@ -57,7 +57,7 @@ class EnhancedDepositMatcher:
                                     cash_expected: float, check_expected: float,
                                     tolerance: float = 0.01) -> Dict:
         """
-        Try to match a single transaction (like GC 1416) to BOTH Cash and Check.
+        Try to match a single transaction (like GC) to BOTH Cash and Check.
         This handles Situation 1: Single transaction representing both types.
         """
         trans_amount = transaction['Amount']
@@ -132,8 +132,8 @@ class EnhancedDepositMatcher:
                                       forward_days: int = 3, verbose: bool = False) -> Dict:
         """
         Flexible matching that tries multiple strategies:
-        1. Single GC 1416 matching both Cash and Check
-        2. Multiple GC 1416s split between Cash and Check
+        1. Single GC transaction matching both Cash and Check
+        2. Multiple GC transactions split between Cash and Check
         3. Any transactions aggregating to match Cash or Check
         """
         date_end = date + timedelta(days=forward_days)
@@ -156,19 +156,19 @@ class EnhancedDepositMatcher:
         if date_transactions.empty:
             return results
         
-        # Strategy 1: Check if single GC 1416 matches Cash + Check total
-        gc_1416_trans = date_transactions[
-            date_transactions['Description'].str.contains('GC 1416', case=False, na=False) |
+        # Strategy 1: Check if single GC transaction matches Cash + Check total
+        gc_trans = date_transactions[
+            date_transactions['Description'].str.contains('GC', case=False, na=False) |
             date_transactions['Description'].str.contains('Cash/Check', case=False, na=False)
         ]
         
-        if len(gc_1416_trans) == 1 and cash_expected > 0 and check_expected > 0:
+        if len(gc_trans) == 1 and cash_expected > 0 and check_expected > 0:
             single_split = self.try_single_transaction_split(
-                gc_1416_trans.iloc[0], cash_expected, check_expected
+                gc_trans.iloc[0], cash_expected, check_expected
             )
             if single_split['matched']:
                 if verbose:
-                    print(f"  ✓ Single GC 1416 split: Cash=${cash_expected:.2f}, Check=${check_expected:.2f}")
+                    print(f"  ✓ Single GC split: Cash=${cash_expected:.2f}, Check=${check_expected:.2f}")
                 
                 results['cash_matched'] = True
                 results['check_matched'] = True
@@ -178,10 +178,10 @@ class EnhancedDepositMatcher:
                 results['shared_transaction'] = True
                 return results
         
-        # Strategy 2: Try traditional GC 1416 allocation
-        if len(gc_1416_trans) > 0:
-            allocation = self.allocate_gc_1416_optimally(
-                gc_1416_trans, cash_expected, check_expected
+        # Strategy 2: Try traditional GC allocation
+        if len(gc_trans) > 0:
+            allocation = self.allocate_gc_optimally(
+                gc_trans, cash_expected, check_expected
             )
             if allocation['matched']:
                 if cash_expected > 0:
@@ -235,42 +235,42 @@ class EnhancedDepositMatcher:
         
         return results
     
-    def allocate_gc_1416_optimally(self, gc_1416_transactions: pd.DataFrame,
+    def allocate_gc_optimally(self, gc_transactions: pd.DataFrame,
                                   cash_expected: float, check_expected: float,
                                   tolerance: float = 0.01) -> Dict:
         """
-        Original optimal allocation method for multiple GC 1416 transactions.
+        Original optimal allocation method for multiple GC transactions.
         """
-        if gc_1416_transactions.empty:
+        if gc_transactions.empty:
             return {'matched': False}
         
-        total_gc = gc_1416_transactions['Amount'].sum()
+        total_gc = gc_transactions['Amount'].sum()
         total_expected = cash_expected + check_expected
         
         # Try exact allocation
         if abs(total_gc - total_expected) < tolerance:
-            for cash_combo_size in range(len(gc_1416_transactions) + 1):
-                for cash_combo in combinations(gc_1416_transactions.index, cash_combo_size):
+            for cash_combo_size in range(len(gc_transactions) + 1):
+                for cash_combo in combinations(gc_transactions.index, cash_combo_size):
                     cash_indices = list(cash_combo)
-                    check_indices = [idx for idx in gc_1416_transactions.index if idx not in cash_indices]
+                    check_indices = [idx for idx in gc_transactions.index if idx not in cash_indices]
                     
-                    cash_sum = gc_1416_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
-                    check_sum = gc_1416_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
+                    cash_sum = gc_transactions.loc[cash_indices, 'Amount'].sum() if cash_indices else 0
+                    check_sum = gc_transactions.loc[check_indices, 'Amount'].sum() if check_indices else 0
                     
                     if abs(cash_sum - cash_expected) < tolerance and abs(check_sum - check_expected) < tolerance:
                         return {
                             'matched': True,
-                            'match_type': 'gc_1416_optimal_split',
+                            'match_type': 'gc_optimal_split',
                             'cash_allocation': {
-                                'transactions': gc_1416_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
-                                'bank_rows': gc_1416_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
+                                'transactions': gc_transactions.loc[cash_indices].to_dict('records') if cash_indices else [],
+                                'bank_rows': gc_transactions.loc[cash_indices, 'Bank_Row_Number'].tolist() if cash_indices else [],
                                 'total': cash_sum,
                                 'expected': cash_expected,
                                 'difference': cash_sum - cash_expected
                             },
                             'check_allocation': {
-                                'transactions': gc_1416_transactions.loc[check_indices].to_dict('records') if check_indices else [],
-                                'bank_rows': gc_1416_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
+                                'transactions': gc_transactions.loc[check_indices].to_dict('records') if check_indices else [],
+                                'bank_rows': gc_transactions.loc[check_indices, 'Bank_Row_Number'].tolist() if check_indices else [],
                                 'total': check_sum,
                                 'expected': check_expected,
                                 'difference': check_sum - check_expected
@@ -285,8 +285,8 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
     """
     Enhanced deposit slip processing with flexible matching strategies.
     """
-    from preprocess_deposit_slip import preprocess_deposit_slip_dynamic, create_highlighted_deposit_slip
-    from preprocess_bank_statement import preprocess_bank_statement
+    from processors.preprocess_deposit_slip import preprocess_deposit_slip_dynamic, create_highlighted_deposit_slip
+    from processors.preprocess_bank_statement import preprocess_bank_statement
     
     print("=== Enhanced Deposit Slip Matching ===\n")
     
@@ -305,7 +305,7 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
     all_matched_bank_rows = set()
     matched_dates_and_types = {}
     unmatched_info = {}
-    gc_1416_allocations = {}
+    gc_allocations = {}
     
     # Process each date
     for _, deposit_row in deposit_slip.iterrows():
@@ -347,9 +347,9 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
             }
             matched_dates_and_types.setdefault(date, []).append('Cash')
             
-            # Store GC 1416 allocation info if applicable
+            # Store GC allocation info if applicable
             if 'shared_transaction' in match_results:
-                gc_1416_allocations[(date, 'Cash')] = {
+                gc_allocations[(date, 'Cash')] = {
                     'amount': cash_expected,
                     'bank_rows': match_results['cash_result']['bank_rows'],
                     'shared': True
@@ -373,9 +373,9 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
             }
             matched_dates_and_types.setdefault(date, []).append('Check')
             
-            # Store GC 1416 allocation info if applicable
+            # Store GC allocation info if applicable
             if 'shared_transaction' in match_results:
-                gc_1416_allocations[(date, 'Check')] = {
+                gc_allocations[(date, 'Check')] = {
                     'amount': check_expected,
                     'bank_rows': match_results['check_result']['bank_rows'],
                     'shared': True
@@ -394,17 +394,17 @@ def process_deposit_slip_enhanced(deposit_slip_path: str, bank_statement_path: s
     print("\n=== Generating Reports ===")
     
     # Calculate discrepancies by deposit type
-    from deposit_matching import calculate_deposit_discrepancies_by_type
+    from matchers.deposit_matching import calculate_deposit_discrepancies_by_type
     deposit_discrepancies = calculate_deposit_discrepancies_by_type(all_results, deposit_slip)
     
     # Create highlighted deposit slip
-    from preprocess_deposit_slip import create_highlighted_deposit_slip
+    from processors.preprocess_deposit_slip import create_highlighted_deposit_slip
     create_highlighted_deposit_slip(
         deposit_slip_path=deposit_slip_path,
         matched_dates_and_types=matched_dates_and_types,
         output_path=f'{output_dir}/deposit_slip_enhanced_highlighted.xlsx',
         unmatched_info=unmatched_info,
-        gc_1416_allocation=gc_1416_allocations,
+        gc_allocation=gc_allocations,
         deposit_discrepancies=deposit_discrepancies
     )
     

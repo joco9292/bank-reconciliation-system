@@ -9,7 +9,7 @@ Handles complex multi-bank scenarios including:
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Font
 
 # Import existing modules
 from preprocess_bank_statement import preprocess_bank_statement

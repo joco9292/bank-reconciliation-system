@@ -21,7 +21,7 @@ def create_comprehensive_test_data():
             'VISA 1234 PURCHASE',           # Matched transaction
             'AMEX 5678 CHARGE',             # Matched transaction  
             'UNKNOWN TRANSACTION',          # Unmatched transaction
-            'GC 1416-DEPOSIT',              # GC transaction
+            'GC 1354-DEPOSIT',              # GC transaction
             'MASTERCARD 9999 DEBIT',        # Matched transaction
             'CASH/CHECK DEPOSIT'            # GC transaction
         ],
@@ -35,7 +35,7 @@ def create_comprehensive_test_data():
         'Visa' if 'VISA' in x else 
         'Amex' if 'AMEX' in x else 
         'Master Card' if 'MASTERCARD' in x else 
-        'GC' if 'GC 1416' in x or 'CASH/CHECK' in x else 
+        'GC' if 'GC' in x or 'CASH/CHECK' in x else 
         'Unknown'
     )
     
@@ -141,7 +141,7 @@ def test_enhanced_commenting():
         'Visa' if 'VISA' in x else 
         'Amex' if 'AMEX' in x else 
         'Master Card' if 'MASTERCARD' in x else 
-        'GC' if 'GC 1416' in x or 'CASH/CHECK' in x else 
+        'GC' if 'GC' in x or 'CASH/CHECK' in x else 
         'Unknown'
     )
     
@@ -225,3 +225,4 @@ def test_enhanced_commenting():
 
 if __name__ == "__main__":
     test_enhanced_commenting()
+

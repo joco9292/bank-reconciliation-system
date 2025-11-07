@@ -25,8 +25,8 @@ def identify_card_type(description: str) -> str:
         'Discover': [r'discover', r'disc(?!.*debit)'],
         'Amex': [r'amex', r'american\s*express', r'amx'],
         'Other Cards': [r'other', r'misc'],
-        'Cash': [r'GC 1416'],
-        'Check': [r'GC 1416']
+        'Cash': [r'GC'],
+        'Check': [r'GC']
     }
     
     for card_type, patterns in card_patterns.items():

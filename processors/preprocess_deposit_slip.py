@@ -19,28 +19,45 @@ def detect_deposit_slip_structure(filepath):
     if header_row is None:
         raise ValueError("Could not find header row with 'Date'")
     
-    # Find the first data row
+    # Find the first data row (skip facility name rows)
     data_start_row = None
     for idx in range(header_row + 1, len(df_raw)):
         try:
-            pd.to_datetime(df_raw.iloc[idx, 0])
+            # Check if this looks like a date (not a facility name)
+            cell_value = str(df_raw.iloc[idx, 0]).strip()
+            if 'Facility Name:' in cell_value or 'facility' in cell_value.lower():
+                continue
+            pd.to_datetime(cell_value)
             data_start_row = idx
             break
         except:
             continue
     
-    # Find the total row
+    # Find the total row (look for the LAST "Total" in the first column)
     total_row = None
-    for idx in range(data_start_row, len(df_raw)):
-        if pd.notna(df_raw.iloc[idx, 0]) and 'Total' in str(df_raw.iloc[idx, 0]):
+    for idx in range(len(df_raw) - 1, data_start_row - 1, -1):  # Search backwards
+        if pd.notna(df_raw.iloc[idx, 0]) and str(df_raw.iloc[idx, 0]).strip() == 'Total':
             total_row = idx
             break
+    
+    # Find any facility name rows and intermediate total rows
+    facility_rows = []
+    intermediate_total_rows = []
+    for idx in range(data_start_row, len(df_raw)):
+        if pd.notna(df_raw.iloc[idx, 0]):
+            cell_value = str(df_raw.iloc[idx, 0]).strip()
+            if 'Facility Name:' in cell_value:
+                facility_rows.append(idx)
+            elif cell_value == 'Total' and idx != total_row:  # Skip the final total row
+                intermediate_total_rows.append(idx)
     
     # Build skip rows list
     skip_rows = []
     skip_rows.extend(range(header_row))
     for idx in range(header_row + 1, data_start_row):
         skip_rows.append(idx)
+    skip_rows.extend(facility_rows)  # Add facility name rows
+    skip_rows.extend(intermediate_total_rows)  # Add intermediate total rows
     if total_row is not None:
         skip_rows.append(total_row)
     
@@ -96,21 +113,21 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                                   matched_dates_and_types: dict,
                                   output_path: str = 'deposit_slip_highlighted.xlsx',
                                   unmatched_info: dict = None,
-                                  gc_1416_allocation: dict = None,
+                                  gc_allocation: dict = None,
                                   deposit_discrepancies: dict = None):
     """
-    Create highlighted deposit slip with special handling for GC 1416 allocations.
+    Create highlighted deposit slip with special handling for GC allocations.
     
     Args:
         deposit_slip_path: Path to original deposit slip
         matched_dates_and_types: Dict of matched dates and deposit types
         output_path: Output path for highlighted file
         unmatched_info: Information about unmatched entries
-        gc_1416_allocation: Dict showing how GC 1416 transactions were allocated between Cash/Check
+        gc_allocation: Dict showing how GC transactions were allocated between Cash/Check
     """
     import shutil
     from openpyxl import load_workbook
-    from openpyxl.styles import PatternFill
+    from openpyxl.styles import PatternFill, Font
     from openpyxl.comments import Comment
     
     # Get the structure info
@@ -123,10 +140,10 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
     workbook = load_workbook(output_path)
     worksheet = workbook.active
     
-    # Define highlight colors
-    green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
-    red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
-    yellow_fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid')  # Add this
+    # Define highlight colors (text colors instead of background)
+    green_font = Font(color='006400')  # Dark green for matched
+    red_font = Font(color='DC143C')    # Crimson red for unmatched
+    yellow_font = Font(color='B8860B') # Dark goldenrod for special cases
     # Create mapping of dates to Excel rows
     excel_row_mapping = {}
     excel_row = structure_info['data_start_row'] + 1
@@ -166,23 +183,23 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                     # Check if matched
                     if matched_dates_and_types and date in matched_dates_and_types:
                         if deposit_type in matched_dates_and_types[date]:
-                            cell.fill = green_fill
+                            cell.font = green_font
                             matched_cells_count += 1
                             
-                            # Add comment if this was from GC 1416 allocation
-                            if gc_1416_allocation and (date, deposit_type) in gc_1416_allocation:
-                                alloc_info = gc_1416_allocation[(date, deposit_type)]
-                                comment_text = f"Matched from GC 1416 transactions:\n"
+                            # Add comment if this was from GC allocation
+                            if gc_allocation and (date, deposit_type) in gc_allocation:
+                                alloc_info = gc_allocation[(date, deposit_type)]
+                                comment_text = f"Matched from GC transactions:\n"
                                 comment_text += f"Allocated ${alloc_info['amount']:,.2f} to {deposit_type}\n"
                                 comment_text += f"Bank rows: {', '.join(map(str, alloc_info['bank_rows'][:5]))}"
                                 if len(alloc_info['bank_rows']) > 5:
                                     comment_text += f"... and {len(alloc_info['bank_rows'])-5} more"
-                                cell.comment = Comment(comment_text, "GC 1416 Allocation")
+                                cell.comment = Comment(comment_text, "GC Allocation")
                                 gc_1416_cells_count += 1
                         else:
                             # Check if partially matched (e.g., Cash matched but Check didn't)
                             if any(dt in matched_dates_and_types[date] for dt in structure_info['deposit_columns']):
-                                cell.fill = yellow_fill  # Partial match for the date
+                                cell.font = yellow_font  # Partial match for the date
 
                     # NEW: Check for best match (yellow highlighting)
                     elif unmatched_info and (date, deposit_type) in unmatched_info:
@@ -191,14 +208,14 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                         # Check if this has a best_match stored
                         if 'best_match' in info and info['best_match'] and info['best_match']['total'] > 0:
                             # Yellow for approximate matches
-                            cell.fill = yellow_fill
+                            cell.font = yellow_font
                             best_match = info['best_match']
                             
                             # Add detailed comment
                             comment_text = f"Expected: ${expected_amount:,.2f}\n"
                             comment_text += f"Best match found: ${best_match['total']:.2f}\n"
                             comment_text += f"Difference: ${best_match['difference']:.2f}\n"
-                            comment_text += f"Using {best_match['combo_size']} GC 1416 transaction(s)\n"
+                            comment_text += f"Using {best_match['combo_size']} GC transaction(s)\n"
                             comment_text += f"Bank rows: {', '.join(map(str, best_match['bank_rows'][:5]))}"
                             if len(best_match['bank_rows']) > 5:
                                 comment_text += f"... and {len(best_match['bank_rows'])-5} more"
@@ -206,25 +223,25 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
                             cell.comment = Comment(comment_text, "Best Match (Not Exact)")
                         else:
                             # Red for no matches at all
-                            cell.fill = red_fill
+                            cell.font = red_font
                             unmatched_cells_count += 1
                             
                             comment_text = f"Expected: ${expected_amount:,.2f}\n"
-                            comment_text += f"No GC 1416 transactions found\n"
+                            comment_text += f"No GC transactions found\n"
                             comment_text += info.get('reason', 'No matches in date range')
                             
                             cell.comment = Comment(comment_text, "Unmatched")
                     
                     elif unmatched_info and (date, deposit_type) in unmatched_info:
                         # Unmatched cell
-                        cell.fill = red_fill
+                        cell.font = red_font
                         unmatched_cells_count += 1
                         
                         info = unmatched_info[(date, deposit_type)]
                         comment_text = f"Expected: ${expected_amount:,.2f}\n"
-                        comment_text += f"Found GC 1416: ${info.get('gc_1416_found', 0):,.2f}\n"
-                        comment_text += f"Difference: ${info.get('gc_1416_found', 0) - expected_amount:,.2f}\n"
-                        comment_text += "\nNote: GC 1416 transactions can be either Cash or Check"
+                        comment_text += f"Found GC: ${info.get('gc_found', 0):,.2f}\n"
+                        comment_text += f"Difference: ${info.get('gc_found', 0) - expected_amount:,.2f}\n"
+                        comment_text += "\nNote: GC transactions can be either Cash or Check"
                         
                         cell.comment = Comment(comment_text, "Matching System")
     
@@ -266,7 +283,7 @@ def create_highlighted_deposit_slip(deposit_slip_path: str,
     print(f"✓ Created highlighted deposit slip: {output_path}")
     print(f"  - Detected {len(deposit_slip_df)} data rows")
     print(f"  - Matched cells (green): {matched_cells_count}")
-    print(f"  - GC 1416 allocations: {gc_1416_cells_count}")
+    print(f"  - GC allocations: {gc_1416_cells_count}")
     print(f"  - Unmatched cells (red): {unmatched_cells_count}")
     if deposit_discrepancies:
         non_zero_diffs = sum(1 for d in deposit_discrepancies.values() if abs(d) > 0.01)

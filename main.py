@@ -171,7 +171,7 @@ def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame,
             })
     
     # Create Excel report with formatting
-    from openpyxl.styles import PatternFill
+    from openpyxl.styles import PatternFill, Font
     
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         if summary_data:
@@ -180,14 +180,14 @@ def generate_enhanced_report(results: dict, bank_statement: pd.DataFrame,
             
             # Add formatting to highlight matched/unmatched
             worksheet = writer.sheets['Summary']
-            green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
-            red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
+            green_font = Font(color='006400')  # Dark green for matched
+            red_font = Font(color='DC143C')    # Crimson red for unmatched
             
             for idx, row in enumerate(summary_df.itertuples(), start=2):
                 if row.Status == 'Matched':
-                    worksheet[f'E{idx}'].fill = green_fill
+                    worksheet[f'E{idx}'].font = green_font
                 else:
-                    worksheet[f'E{idx}'].fill = red_fill
+                    worksheet[f'E{idx}'].font = red_font
         
         if detailed_matches:
             pd.DataFrame(detailed_matches).to_excel(writer, sheet_name='Matched_Details', index=False)

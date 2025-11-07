@@ -117,9 +117,9 @@ def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_date
     workbook = load_workbook(output_path)
     worksheet = workbook.active
     
-    # Define highlight colors
-    green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
-    red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
+    # Define highlight colors (text colors instead of background)
+    green_font = Font(color='006400')  # Dark green for matched
+    red_font = Font(color='DC143C')    # Crimson red for unmatched
     
     # Create mapping of dates to Excel rows
     excel_row_mapping = {}
@@ -162,10 +162,10 @@ def create_highlighted_card_summary_dynamic(card_summary_path: str, matched_date
                     
                     # Check if matched
                     if matched_dates_and_types and date in matched_dates_and_types and card_type in matched_dates_and_types[date]:
-                        cell.fill = green_fill
+                        cell.font = green_font
                         matched_cells_count += 1
                     elif unmatched_info and (date, card_type) in unmatched_info:
-                        cell.fill = red_fill
+                        cell.font = red_font
                         unmatched_cells_count += 1
                         
                         # Add comment

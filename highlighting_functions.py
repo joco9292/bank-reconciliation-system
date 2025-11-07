@@ -1,6 +1,6 @@
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.comments import Comment
 import shutil
@@ -36,11 +36,11 @@ def create_highlighted_bank_statement(bank_statement_path: str, matched_bank_row
         workbook = writer.book
         worksheet = writer.sheets['Bank Statement']
         
-        # Define highlight colors
-        green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')  # Matched
-        red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')    # Unmatched
-        blue_fill = PatternFill(start_color='87CEEB', end_color='87CEEB', fill_type='solid')   # GC transactions
-        yellow_fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid') # Other special cases
+        # Define highlight colors (text colors instead of background)
+        green_font = Font(color='006400')  # Dark green for matched
+        red_font = Font(color='DC143C')    # Crimson red for unmatched
+        blue_font = Font(color='0000CD')   # Medium blue for GC transactions
+        yellow_font = Font(color='B8860B') # Dark goldenrod for other special cases
         
         # Process all rows in the bank statement
         for row_idx in range(len(original_df)):
@@ -49,12 +49,12 @@ def create_highlighted_bank_statement(bank_statement_path: str, matched_bank_row
             
             if 2 <= worksheet_row <= len(original_df) + 1:
                 # Determine highlight color and comment based on transaction type
-                fill_color = None
+                font_color = None
                 comment_text = None
                 
                 if excel_row in matched_bank_rows:
                     # Matched transaction
-                    fill_color = green_fill
+                    font_color = green_font
                     if transaction_details and excel_row in transaction_details:
                         comment_text = _create_transaction_comment(
                             excel_row, transaction_details[excel_row], 
@@ -63,22 +63,22 @@ def create_highlighted_bank_statement(bank_statement_path: str, matched_bank_row
                         )
                 elif unmatched_transactions and excel_row in unmatched_transactions:
                     # Unmatched transaction
-                    fill_color = red_fill
+                    font_color = red_font
                     comment_text = _create_unmatched_transaction_comment(
                         excel_row, unmatched_transactions[excel_row]
                     )
                 elif gc_transactions and excel_row in gc_transactions:
                     # GC transaction
-                    fill_color = blue_fill
+                    font_color = blue_font
                     comment_text = _create_gc_transaction_comment(
                         excel_row, gc_transactions[excel_row]
                     )
                 
                 # Apply highlighting and comments
-                if fill_color:
+                if font_color:
                     for col in range(1, len(original_df.columns) + 1):
                         cell = worksheet.cell(row=worksheet_row, column=col)
-                        cell.fill = fill_color
+                        cell.font = font_color
                         
                         # Add comment to the first cell
                         if col == 1 and comment_text:
@@ -314,11 +314,11 @@ def create_combined_highlighted_bank_statement(bank_statement_path: str,
         workbook = writer.book
         worksheet = writer.sheets['Bank Statement']
         
-        # Define highlight colors
-        green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')    # Card matches
-        blue_fill = PatternFill(start_color='87CEEB', end_color='87CEEB', fill_type='solid')     # Deposit matches
-        purple_fill = PatternFill(start_color='DDA0DD', end_color='DDA0DD', fill_type='solid')   # Both matched
-        red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')     # Attempted but failed
+        # Define highlight colors (text colors instead of background)
+        green_font = Font(color='006400')    # Dark green for card matches
+        blue_font = Font(color='0000CD')     # Medium blue for deposit matches
+        purple_font = Font(color='800080')   # Purple for both matched
+        red_font = Font(color='DC143C')      # Crimson red for attempted but failed
         
         # Apply highlighting
         for row_idx in range(len(original_df)):
@@ -326,25 +326,25 @@ def create_combined_highlighted_bank_statement(bank_statement_path: str,
             bank_row = excel_row  # bank_row is same as excel_row for highlighting
             
             # Determine highlight color based on priority: overlap > individual matches > failed attempts
-            fill_color = None
+            font_color = None
             if bank_row in overlap_matched:
                 # Purple for rows matched by both systems
-                fill_color = purple_fill
+                font_color = purple_font
             elif bank_row in card_matched_rows:
                 # Green for card matches only
-                fill_color = green_fill
+                font_color = green_font
             elif bank_row in deposit_matched_rows:
                 # Blue for deposit matches only
-                fill_color = blue_fill
+                font_color = blue_font
             elif bank_row in failed_attempts:
                 # Red for attempted but failed
-                fill_color = red_fill
+                font_color = red_font
             
             # Apply the color if determined
-            if fill_color:
+            if font_color:
                 for col in range(1, len(original_df.columns) + 1):
                     cell = worksheet.cell(row=excel_row, column=col)
-                    cell.fill = fill_color
+                    cell.font = font_color
                     
                     # Add comment to the first cell of each matched row
                     if col == 1:
@@ -443,9 +443,9 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
     workbook = load_workbook(output_path)
     worksheet = workbook.active
     
-    # Define highlight colors
-    green_fill = PatternFill(start_color='90EE90', end_color='90EE90', fill_type='solid')
-    red_fill = PatternFill(start_color='FFB6C1', end_color='FFB6C1', fill_type='solid')
+    # Define highlight colors (text colors instead of background)
+    green_font = Font(color='006400')  # Dark green for matched
+    red_font = Font(color='DC143C')    # Crimson red for unmatched
     
     # Read the data to understand the structure
     card_summary_df = pd.read_excel(card_summary_path, skiprows=skiprows)
@@ -505,11 +505,11 @@ def create_highlighted_card_summary(card_summary_path: str, matched_dates_and_ty
                     # Check if this cell was matched
                     if matched_dates_and_types and date in matched_dates_and_types and card_type in matched_dates_and_types[date]:
                         # Matched cell - color green
-                        cell.fill = green_fill
+                        cell.font = green_font
                         matched_cells_count += 1
                     elif unmatched_info and (date, card_type) in unmatched_info:
                         # Unmatched cell - color red and add comment
-                        cell.fill = red_fill
+                        cell.font = red_font
                         unmatched_cells_count += 1
                         
                         # Add comment with what was actually found
@@ -733,9 +733,9 @@ def extract_gc_transactions_for_comments(results: dict, bank_statement: pd.DataF
     """
     gc_transactions = {}
     
-    # Look for GC 1416 transactions in the bank statement
+    # Look for GC transactions in the bank statement
     gc_transactions_df = bank_statement[
-        (bank_statement['Description'].str.contains('GC 1416', case=False, na=False)) |
+        (bank_statement['Description'].str.contains('GC', case=False, na=False)) |
         (bank_statement['Description'].str.contains('CASH/CHECK', case=False, na=False)) |
         (bank_statement['Description'].str.contains('Cash/Check', case=False, na=False))
     ]
